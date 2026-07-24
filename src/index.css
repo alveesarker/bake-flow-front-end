@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-line;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-mist text-ink font-sans text-[14px] leading-relaxed;
+  }
+  html[lang="bn"] body {
+    font-family: "Hind Siliguri", "Inter", sans-serif;
+  }
+  h1, h2, h3, h4 {
+    font-family: "Manrope", sans-serif;
+  }
+  ::selection {
+    background: #111111;
+    color: #ffffff;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #E5E5E5; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: #d3d3d3; }
+
+  :focus-visible {
+    outline: 2px solid #111111;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .num {
+    @apply font-mono tabular-nums;
+  }
+}
