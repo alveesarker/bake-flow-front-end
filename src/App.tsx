@@ -6,9 +6,7 @@ import { AppLayout } from "./components/layout/AppLayout";
 
 import Dashboard from "./pages/Dashboard";
 import Products from "./pages/Products";
-import ProductInventory from "./pages/ProductInventory";
 import RawMaterials from "./pages/RawMaterials";
-import RawMaterialInventory from "./pages/RawMaterialInventory";
 import Production from "./pages/Production";
 import CustomerSales from "./pages/CustomerSales";
 import DistributorSales from "./pages/DistributorSales";
@@ -29,7 +27,7 @@ export default function App() {
               <Route element={<AppLayout />}>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/products" element={<Products />} />
-                <Route path="/product-inventory" element={<ProductInventory />} />
+                {/* <Route path="/product-inventory" element={<ProductInventory />} /> */}
                 <Route path="/inventory" element={<RawMaterials />} />
                 {/* <Route path="/raw-material-inventory" element={<RawMaterialInventory />} /> */}
                 <Route path="/production" element={<Production />} />

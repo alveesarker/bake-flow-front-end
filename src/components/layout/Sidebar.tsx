@@ -23,7 +23,6 @@ import { cn } from "../../lib/utils";
 const items = [
   { to: "/", icon: LayoutDashboard, key: "dashboard", end: true },
   { to: "/products", icon: Package, key: "products" },
-  { to: "/product-inventory", icon: Boxes, key: "productInventory" },
   { to: "/inventory", icon: Wheat, key: "rawMaterials" },
   { to: "/production", icon: Factory, key: "production" },
   { to: "/customer-sales", icon: ShoppingCart, key: "customerSales" },

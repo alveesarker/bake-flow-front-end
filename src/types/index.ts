@@ -115,5 +115,4 @@ export interface StockMovement {
   date: string;
   type: "increase" | "decrease";
   quantity: number;
-  reason: string;
 }

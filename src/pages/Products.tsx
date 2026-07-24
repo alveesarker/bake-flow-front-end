@@ -1,12 +1,11 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Pencil, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Dialog } from "../components/ui/Dialog";
-import { formatDate } from "../lib/utils";
 import {
   FieldError,
   FieldGroup,
@@ -35,46 +34,128 @@ import { useTableData } from "../hooks/useTableData";
 import { useToast } from "../hooks/useToast";
 import { useTranslation } from "../i18n/I18nContext";
 import { formatCurrency } from "../lib/utils";
-import { useDataStore, stockStatus } from "../store/DataStore";
-import type { Product } from "../types";
 
-const categories = [
-  "breads",
-  "pastries",
-  "cakes",
-  "cookies",
-  "beverages",
-] as const;
+// ---------------------------------------------------------------------------
+// API config
+// ---------------------------------------------------------------------------
+const API_BASE = "http://localhost:5000/api/products/";
 
+// Raw shape returned by GET /api/products
+interface ApiProduct {
+  product_id: number;
+  product_name: string;
+  product_code: string;
+  category_id: number;
+  category_name: string;
+  description: string;
+  customer_price: string | number;
+  distributor_price: string | number;
+  unit: string;
+  weight: string | number;
+  minimum_stock: number;
+  status: "Active" | "Inactive";
+  inventory_id: number;
+  stock_quantity: number;
+  stock_last_updated: string;
+}
+
+async function apiGetProducts(): Promise<ApiProduct[]> {
+  const res = await fetch(API_BASE);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message || "Failed to load products");
+  return json.data;
+}
+
+async function apiCreateProduct(payload: Record<string, unknown>) {
+  const res = await fetch(API_BASE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  if (!res.ok || json.success === false) {
+    throw new Error(json.message || "Failed to create product");
+  }
+  return json;
+}
+
+async function apiUpdateProduct(id: number, payload: Record<string, unknown>) {
+  const res = await fetch(`${API_BASE}${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  if (!res.ok || json.success === false) {
+    throw new Error(json.message || "Failed to update product");
+  }
+  return json;
+}
+
+async function apiDeleteProduct(id: number) {
+  const res = await fetch(`${API_BASE}${id}`, { method: "DELETE" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.success === false) {
+    throw new Error(json.message || "Failed to delete product");
+  }
+  return json;
+}
+
+// NOTE: No dedicated stock route exists in the router you shared, so this
+// sends a partial update to PUT /api/products/:id with just stock_quantity.
+// If you add a dedicated route (e.g. PATCH /api/products/:id/stock), this is
+// the only place you need to change.
+async function apiSetStock(id: number, stock_quantity: number) {
+  const res = await fetch(`${API_BASE}${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stock_quantity }),
+  });
+  const json = await res.json();
+  if (!res.ok || json.success === false) {
+    throw new Error(json.message || "Failed to update stock");
+  }
+  return json;
+}
+
+// ---------------------------------------------------------------------------
+// Form schema
+// ---------------------------------------------------------------------------
 function useProductSchema() {
   const { t } = useTranslation();
   return z.object({
-    name: z.string().min(2, t("validation.tooShort")),
-    code: z.string().min(2, t("validation.tooShort")),
-    category: z.enum(categories),
+    product_name: z.string().min(2, t("validation.tooShort")),
+    product_code: z.string().min(2, t("validation.tooShort")),
+    category_id: z.number(t("validation.requiredField")),
     description: z.string(),
-    customerPrice: z.number().positive(t("validation.mustBePositive")),
-    distributorPrice: z.number().positive(t("validation.mustBePositive")),
+    customer_price: z.number().positive(t("validation.mustBePositive")),
+    distributor_price: z.number().positive(t("validation.mustBePositive")),
     unit: z.string().min(1, t("validation.requiredField")),
     weight: z.number().nonnegative(t("validation.mustBeNonNegative")),
-    minStock: z.number().nonnegative(t("validation.mustBeNonNegative")),
-    status: z.enum(["active", "inactive"]),
+    minimum_stock: z.number().nonnegative(t("validation.mustBeNonNegative")),
+    status: z.enum(["Active", "Inactive"]),
   });
 }
 
 type ProductFormValues = z.infer<ReturnType<typeof useProductSchema>>;
 
+// ---------------------------------------------------------------------------
+// Create / edit product dialog
+// ---------------------------------------------------------------------------
 function ProductFormDialog({
   open,
   onClose,
   editing,
+  categoryOptions,
+  onSaved,
 }: {
   open: boolean;
   onClose: () => void;
-  editing: Product | null;
+  editing: ApiProduct | null;
+  categoryOptions: { category_id: number; category_name: string }[];
+  onSaved: () => void;
 }) {
   const { t } = useTranslation();
-  const { addProduct, updateProduct } = useDataStore();
   const { toast } = useToast();
   const schema = useProductSchema();
 
@@ -82,54 +163,63 @@ function ProductFormDialog({
     register,
     handleSubmit,
     reset,
-    formState: { errors },
+    formState: { errors, isSubmitting },
   } = useForm<ProductFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: editing
+    values: editing
       ? {
-          name: editing.name,
-          code: editing.code,
-          category: editing.category,
+          product_name: editing.product_name,
+          product_code: editing.product_code,
+          category_id: editing.category_id,
           description: editing.description,
-          customerPrice: editing.customerPrice,
-          distributorPrice: editing.distributorPrice,
+          customer_price: Number(editing.customer_price),
+          distributor_price: Number(editing.distributor_price),
           unit: editing.unit,
-          weight: editing.weight,
-          minStock: editing.minStock,
+          weight: Number(editing.weight),
+          minimum_stock: editing.minimum_stock,
           status: editing.status,
         }
       : {
-          name: "",
-          code: "",
-          category: "breads",
+          product_name: "",
+          product_code: "",
+          category_id: categoryOptions[0]?.category_id ?? 0,
           description: "",
-          customerPrice: 0,
-          distributorPrice: 0,
+          customer_price: 0,
+          distributor_price: 0,
           unit: "pc",
           weight: 0,
-          minStock: 10,
-          status: "active",
+          minimum_stock: 10,
+          status: "Active",
         },
   });
 
-  const onSubmit = (values: ProductFormValues) => {
-    if (editing) {
-      updateProduct(editing.id, values);
+  const onSubmit = async (values: ProductFormValues) => {
+    try {
+      if (editing) {
+        await apiUpdateProduct(editing.product_id, values);
+        toast({
+          variant: "success",
+          title: t("toast.updatedTitle"),
+          description: t("toast.updatedDesc", { item: values.product_name }),
+        });
+      } else {
+        await apiCreateProduct(values);
+        toast({
+          variant: "success",
+          title: t("toast.createdTitle"),
+          description: t("toast.createdDesc", { item: values.product_name }),
+        });
+      }
+      reset();
+      onSaved();
+      onClose();
+    } catch (err) {
       toast({
-        variant: "success",
-        title: t("toast.updatedTitle"),
-        description: t("toast.updatedDesc", { item: values.name }),
-      });
-    } else {
-      addProduct({ ...values, image: "🥐", stock: 0 });
-      toast({
-        variant: "success",
-        title: t("toast.createdTitle"),
-        description: t("toast.createdDesc", { item: values.name }),
+        variant: "error",
+        title: t("common.error"),
+        description: err instanceof Error ? err.message : String(err),
       });
     }
-    reset();
-    onClose();
   };
 
   return (
@@ -149,7 +239,9 @@ function ProductFormDialog({
           >
             {t("common.cancel")}
           </Button>
-          <Button onClick={handleSubmit(onSubmit)}>{t("common.save")}</Button>
+          <Button onClick={handleSubmit(onSubmit)} disabled={isSubmitting}>
+            {t("common.save")}
+          </Button>
         </>
       }
     >
@@ -161,29 +253,33 @@ function ProductFormDialog({
           <FieldLabel required>{t("products.form.name")}</FieldLabel>
           <Input
             placeholder={t("products.form.namePlaceholder")}
-            invalid={!!errors.name}
-            {...register("name")}
+            invalid={!!errors.product_name}
+            {...register("product_name")}
           />
-          <FieldError>{errors.name?.message}</FieldError>
+          <FieldError>{errors.product_name?.message}</FieldError>
         </FieldGroup>
         <FieldGroup>
           <FieldLabel required>{t("products.form.code")}</FieldLabel>
           <Input
             placeholder={t("products.form.codePlaceholder")}
-            invalid={!!errors.code}
-            {...register("code")}
+            invalid={!!errors.product_code}
+            {...register("product_code")}
           />
-          <FieldError>{errors.code?.message}</FieldError>
+          <FieldError>{errors.product_code?.message}</FieldError>
         </FieldGroup>
         <FieldGroup>
           <FieldLabel required>{t("products.form.category")}</FieldLabel>
-          <Select {...register("category")}>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {t(`products.categories.${c}`)}
+          <Select
+            invalid={!!errors.category_id}
+            {...register("category_id", { valueAsNumber: true })}
+          >
+            {categoryOptions.map((c) => (
+              <option key={c.category_id} value={c.category_id}>
+                {c.category_name}
               </option>
             ))}
           </Select>
+          <FieldError>{errors.category_id?.message}</FieldError>
         </FieldGroup>
         <FieldGroup>
           <FieldLabel required>{t("products.form.unit")}</FieldLabel>
@@ -206,10 +302,10 @@ function ProductFormDialog({
           <Input
             type="number"
             step="0.01"
-            invalid={!!errors.customerPrice}
-            {...register("customerPrice", { valueAsNumber: true })}
+            invalid={!!errors.customer_price}
+            {...register("customer_price", { valueAsNumber: true })}
           />
-          <FieldError>{errors.customerPrice?.message}</FieldError>
+          <FieldError>{errors.customer_price?.message}</FieldError>
         </FieldGroup>
         <FieldGroup>
           <FieldLabel required>
@@ -218,10 +314,10 @@ function ProductFormDialog({
           <Input
             type="number"
             step="0.01"
-            invalid={!!errors.distributorPrice}
-            {...register("distributorPrice", { valueAsNumber: true })}
+            invalid={!!errors.distributor_price}
+            {...register("distributor_price", { valueAsNumber: true })}
           />
-          <FieldError>{errors.distributorPrice?.message}</FieldError>
+          <FieldError>{errors.distributor_price?.message}</FieldError>
         </FieldGroup>
         <FieldGroup>
           <FieldLabel>{t("products.form.weight")}</FieldLabel>
@@ -234,65 +330,138 @@ function ProductFormDialog({
           <FieldLabel required>{t("products.form.minStock")}</FieldLabel>
           <Input
             type="number"
-            invalid={!!errors.minStock}
-            {...register("minStock", { valueAsNumber: true })}
+            invalid={!!errors.minimum_stock}
+            {...register("minimum_stock", { valueAsNumber: true })}
           />
-          <FieldError>{errors.minStock?.message}</FieldError>
+          <FieldError>{errors.minimum_stock?.message}</FieldError>
         </FieldGroup>
         <FieldGroup>
           <FieldLabel>{t("products.form.status")}</FieldLabel>
           <Select {...register("status")}>
-            <option value="active">{t("common.active")}</option>
-            <option value="inactive">{t("common.inactive")}</option>
+            <option value="Active">{t("common.active")}</option>
+            <option value="Inactive">{t("common.inactive")}</option>
           </Select>
-        </FieldGroup>
-        <FieldGroup>
-          <FieldLabel>{t("products.form.image")}</FieldLabel>
-          <div className="flex h-9.5 items-center rounded-md border border-dashed border-line px-3 text-xs text-muted">
-            {t("products.form.imageHint")}
-          </div>
         </FieldGroup>
       </form>
     </Dialog>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
 export default function Products() {
   const { t } = useTranslation();
-  const { products, deleteProduct, adjustProductStock, stockHistory } =
-    useDataStore();
   const { toast } = useToast();
+
+  const [products, setProducts] = useState<ApiProduct[]>([]);
+  const [loading, setLoading] = useState(true);
+
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [adjusting, setAdjusting] = useState<Product | null>(null);
-  const [editing, setEditing] = useState<Product | null>(null);
-  const [deleting, setDeleting] = useState<Product | null>(null);
+  const [editing, setEditing] = useState<ApiProduct | null>(null);
+  const [deleting, setDeleting] = useState<ApiProduct | null>(null);
+
+  const [adjusting, setAdjusting] = useState<ApiProduct | null>(null);
+  const [adjQty, setAdjQty] = useState("");
+  const [savingStock, setSavingStock] = useState(false);
+
   const [category, setCategory] = useState("all");
   const [status, setStatus] = useState("all");
 
-  const [historyFor, setHistoryFor] = useState<Product | null>(null);
-  const [adjType, setAdjType] = useState<"increase" | "decrease">("increase");
-  const [adjQty, setAdjQty] = useState("");
-  const [adjReason, setAdjReason] = useState("");
+  const loadProducts = async () => {
+    setLoading(true);
+    try {
+      const data = await apiGetProducts();
+      setProducts(data);
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const filtered = products.filter(
-    (p) => status === "all" || stockStatus(p.stock, p.minStock) === status,
-  );
+  useEffect(() => {
+    loadProducts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Categories derived from whatever products are loaded, since there's no
+  // dedicated /api/categories endpoint yet.
+  const categoryOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    products.forEach((p) => map.set(p.category_id, p.category_name));
+    return Array.from(map.entries()).map(([category_id, category_name]) => ({
+      category_id,
+      category_name,
+    }));
+  }, [products]);
+
+  const filtered = products.filter((p) => {
+    const matchesCategory =
+      category === "all" || String(p.category_id) === category;
+    const matchesStatus = status === "all" || p.status === status;
+    return matchesCategory && matchesStatus;
+  });
+
   const table = useTableData(filtered, {
-    searchFields: (p) => [p.name, p.code],
+    searchFields: (p) => [p.product_name, p.product_code],
     pageSize: 8,
   });
 
-  const submitAdjust = () => {
-    if (!adjusting || !adjQty) return;
-    adjustProductStock(adjusting.id, adjType, Number(adjQty), adjReason);
-    toast({
-      variant: "success",
-      title: t("toast.stockAdjustedTitle"),
-      description: t("toast.stockAdjustedDesc"),
-    });
-    setAdjusting(null);
-    setAdjQty("");
-    setAdjReason("");
+  const openAdjustDialog = (p: ApiProduct) => {
+    setAdjusting(p);
+    setAdjQty(String(p.stock_quantity));
+  };
+
+  const submitAdjust = async () => {
+    if (!adjusting || adjQty === "") return;
+    const newQty = Number(adjQty);
+    if (Number.isNaN(newQty) || newQty < 0) return;
+
+    setSavingStock(true);
+    try {
+      await apiSetStock(adjusting.product_id, newQty);
+      toast({
+        variant: "success",
+        title: t("toast.stockAdjustedTitle"),
+        description: t("toast.stockAdjustedDesc"),
+      });
+      setAdjusting(null);
+      setAdjQty("");
+      loadProducts();
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSavingStock(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    try {
+      await apiDeleteProduct(deleting.product_id);
+      toast({
+        variant: "success",
+        title: t("toast.deletedTitle"),
+        description: t("toast.deletedDesc", { item: deleting.product_name }),
+      });
+      setDeleting(null);
+      loadProducts();
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 
   return (
@@ -325,9 +494,9 @@ export default function Products() {
             onChange={(e) => setCategory(e.target.value)}
           >
             <option value="all">{t("common.allCategories")}</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {t(`products.categories.${c}`)}
+            {categoryOptions.map((c) => (
+              <option key={c.category_id} value={String(c.category_id)}>
+                {c.category_name}
               </option>
             ))}
           </Select>
@@ -337,12 +506,16 @@ export default function Products() {
             onChange={(e) => setStatus(e.target.value)}
           >
             <option value="all">{t("common.allStatuses")}</option>
-            <option value="active">{t("common.active")}</option>
-            <option value="inactive">{t("common.inactive")}</option>
+            <option value="Active">{t("common.active")}</option>
+            <option value="Inactive">{t("common.inactive")}</option>
           </Select>
         </div>
 
-        {table.rows.length === 0 ? (
+        {loading ? (
+          <div className="p-10 text-center text-sm text-muted">
+            {t("common.loading") || "Loading..."}
+          </div>
+        ) : table.rows.length === 0 ? (
           <EmptyState
             title={t("common.noResults")}
             hint={t("common.noResultsHint")}
@@ -352,11 +525,12 @@ export default function Products() {
             <Table>
               <THead>
                 <TR>
-                  <TH>{t("products.columns.image")}</TH>
                   <TH
                     sortable
-                    sortDir={table.sortKey === "name" ? table.sortDir : null}
-                    onClick={() => table.toggleSort("name")}
+                    sortDir={
+                      table.sortKey === "product_name" ? table.sortDir : null
+                    }
+                    onClick={() => table.toggleSort("product_name")}
                   >
                     {t("products.columns.name")}
                   </TH>
@@ -365,56 +539,47 @@ export default function Products() {
                   <TH
                     sortable
                     sortDir={
-                      table.sortKey === "customerPrice" ? table.sortDir : null
+                      table.sortKey === "customer_price" ? table.sortDir : null
                     }
-                    onClick={() => table.toggleSort("customerPrice")}
+                    onClick={() => table.toggleSort("customer_price")}
                   >
                     {t("products.columns.customerPrice")}
                   </TH>
                   <TH>{t("products.columns.distributorPrice")}</TH>
                   <TH
                     sortable
-                    sortDir={table.sortKey === "stock" ? table.sortDir : null}
-                    onClick={() => table.toggleSort("stock")}
+                    sortDir={
+                      table.sortKey === "stock_quantity" ? table.sortDir : null
+                    }
+                    onClick={() => table.toggleSort("stock_quantity")}
                   >
                     {t("products.columns.stock")}
                   </TH>
-                  {/* <TH>{t("products.columns.status")}</TH> */}
                   <TH className="text-right">{t("common.actions")}</TH>
                 </TR>
               </THead>
               <TBody>
                 {table.rows.map((p) => (
-                  <TR key={p.id}>
-                    <TD>
-                      <span className="flex h-9 w-9 items-center justify-center rounded-md bg-mist text-lg">
-                        {p.image}
-                      </span>
+                  <TR key={p.product_id}>
+                    <TD className="font-medium">{p.product_name}</TD>
+                    <TD className="text-muted num">{p.product_code}</TD>
+                    <TD className="text-muted">{p.category_name}</TD>
+                    <TD className="num">
+                      {formatCurrency(Number(p.customer_price))}
                     </TD>
-                    <TD className="font-medium">{p.name}</TD>
-                    <TD className="text-muted num">{p.code}</TD>
-                    <TD className="text-muted">
-                      {t(`products.categories.${p.category}`)}
-                    </TD>
-                    <TD className="num">{formatCurrency(p.customerPrice)}</TD>
                     <TD className="num text-muted">
-                      {formatCurrency(p.distributorPrice)}
+                      {formatCurrency(Number(p.distributor_price))}
                     </TD>
                     <TD>
-                      <div className="flex items-center gap-2">
-                        <span className="num">{p.stock}</span>
-                        {/* <StockBadge status={stockStatus(p.stock, p.minStock)} /> */}
-                      </div>
+                      <span className="num">{p.stock_quantity}</span>
                     </TD>
-                    {/* <TD><StatusBadge status={p.status} /></TD> */}
                     <TD>
                       <div className="flex justify-end gap-1">
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => setAdjusting(p)}
+                          onClick={() => openAdjustDialog(p)}
                         >
-                          <SlidersHorizontal size={13} />{" "}
                           {t("productInventory.adjustStock")}
                         </Button>
                         <Button
@@ -458,20 +623,16 @@ export default function Products() {
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
         editing={editing}
+        categoryOptions={categoryOptions}
+        onSaved={loadProducts}
       />
+
       {deleting && (
         <ConfirmDialog
           open={!!deleting}
           onClose={() => setDeleting(null)}
-          itemName={deleting.name}
-          onConfirm={() => {
-            deleteProduct(deleting.id);
-            toast({
-              variant: "success",
-              title: t("toast.deletedTitle"),
-              description: t("toast.deletedDesc", { item: deleting.name }),
-            });
-          }}
+          itemName={deleting.product_name}
+          onConfirm={confirmDelete}
         />
       )}
 
@@ -480,7 +641,9 @@ export default function Products() {
         onClose={() => setAdjusting(null)}
         title={
           adjusting
-            ? t("productInventory.adjustTitle", { name: adjusting.name })
+            ? t("productInventory.adjustTitle", {
+                name: adjusting.product_name,
+              })
             : ""
         }
         size="sm"
@@ -489,7 +652,9 @@ export default function Products() {
             <Button variant="outline" onClick={() => setAdjusting(null)}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={submitAdjust}>{t("common.save")}</Button>
+            <Button onClick={submitAdjust} disabled={savingStock}>
+              {t("common.save")}
+            </Button>
           </>
         }
       >
@@ -497,58 +662,11 @@ export default function Products() {
           <FieldLabel required>{t("common.quantity")}</FieldLabel>
           <Input
             type="number"
+            min={0}
             value={adjQty}
             onChange={(e) => setAdjQty(e.target.value)}
           />
         </FieldGroup>
-      </Dialog>
-
-      <Dialog
-        open={!!historyFor}
-        onClose={() => setHistoryFor(null)}
-        title={
-          historyFor
-            ? t("productInventory.historyTitle", { name: historyFor.name })
-            : ""
-        }
-        size="md"
-      >
-        {(() => {
-          const history = historyFor
-            ? (stockHistory[`product:${historyFor.id}`] ?? [])
-            : [];
-          if (history.length === 0)
-            return (
-              <p className="py-6 text-center text-xs text-muted">
-                {t("productInventory.historyEmpty")}
-              </p>
-            );
-          return (
-            <div className="space-y-2">
-              {history.map((h) => (
-                <div
-                  key={h.id}
-                  className="flex items-center justify-between rounded-md border border-line px-3 py-2.5 text-[13px]"
-                >
-                  <div>
-                    <p className="text-ink">{h.reason}</p>
-                    <p className="text-[11px] text-muted">
-                      {formatDate(h.date)}
-                    </p>
-                  </div>
-                  <span
-                    className={
-                      h.type === "increase" ? "text-success" : "text-danger"
-                    }
-                  >
-                    {h.type === "increase" ? "+" : "−"}
-                    {h.quantity}
-                  </span>
-                </div>
-              ))}
-            </div>
-          );
-        })()}
       </Dialog>
     </div>
   );

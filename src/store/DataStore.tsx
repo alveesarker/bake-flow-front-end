@@ -28,7 +28,7 @@ interface DataStoreValue {
   addProduct: (p: Omit<Product, "id">) => void;
   updateProduct: (id: string, p: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
-  adjustProductStock: (id: string, type: "increase" | "decrease", qty: number, reason: string) => void;
+  adjustProductStock: (id: string, type: "increase" | "decrease", qty: number) => void;
 
   addRawMaterial: (m: Omit<RawMaterial, "id">) => void;
   updateRawMaterial: (id: string, m: Partial<RawMaterial>) => void;
@@ -82,7 +82,7 @@ export function DataStoreProvider({ children }: { children: ReactNode }) {
   const deleteProduct: DataStoreValue["deleteProduct"] = (id) =>
     setProducts((prev) => prev.filter((x) => x.id !== id));
 
-  const adjustProductStock: DataStoreValue["adjustProductStock"] = (id, type, qty, reason) => {
+  const adjustProductStock: DataStoreValue["adjustProductStock"] = (id, type, qty) => {
     setProducts((prev) =>
       prev.map((x) =>
         x.id === id
@@ -95,7 +95,6 @@ export function DataStoreProvider({ children }: { children: ReactNode }) {
       date: new Date().toISOString(),
       type,
       quantity: qty,
-      reason,
     });
   };
 
@@ -118,7 +117,6 @@ export function DataStoreProvider({ children }: { children: ReactNode }) {
       date,
       type: "increase",
       quantity: qty,
-      reason: notes || "Purchase",
     });
     setExpenses((prev) => [
       {
@@ -145,7 +143,6 @@ export function DataStoreProvider({ children }: { children: ReactNode }) {
       date: new Date().toISOString(),
       type,
       quantity: qty,
-      reason,
     });
   };
 
@@ -188,7 +185,6 @@ export function DataStoreProvider({ children }: { children: ReactNode }) {
             date: batch.date,
             type: "decrease",
             quantity: needed,
-            reason: `Used in production ${batch.id}`,
           });
           return { ...m, currentStock: Math.max(0, m.currentStock - needed) };
         })
@@ -202,7 +198,6 @@ export function DataStoreProvider({ children }: { children: ReactNode }) {
       date: batch.date,
       type: "increase",
       quantity: batch.quantity,
-      reason: `Production ${batch.id} completed`,
     });
     setProductionBatches((prev) => prev.map((b) => (b.id === id ? { ...b, status: "completed" } : b)));
     return { ok: true };
