@@ -1,7 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Eye, CheckCircle2, AlertTriangle, CheckCircle } from "lucide-react";
 import { useTranslation } from "../i18n/I18nContext";
-import { useDataStore } from "../store/DataStore";
 import { useToast } from "../hooks/useToast";
 import { useTableData } from "../hooks/useTableData";
 import { PageHeader, SearchInput, EmptyState, Pagination } from "../components/ui/Misc";
@@ -12,25 +11,187 @@ import { FieldGroup, FieldLabel, Input, Select } from "../components/ui/Field";
 import { ProductionStatusBadge } from "../components/ui/Badge";
 import { Table, THead, TBody, TR, TH, TD, TableWrap } from "../components/ui/Table";
 import { formatDate } from "../lib/utils";
-import type { ProductionBatch } from "../types";
 
-function RecipePreview({ productId, quantity }: { productId: string; quantity: number }) {
-  const { t } = useTranslation();
-  const { recipes, rawMaterials } = useDataStore();
-  const recipe = recipes.find((r) => r.productId === productId);
+// ---------------------------------------------------------------------------
+// API config
+// ---------------------------------------------------------------------------
+const PRODUCTS_API_BASE = "http://localhost:5000/api/products/";
+const EMPLOYEE_API_BASE = "http://localhost:5000/api/employee/";
+const RAW_MATERIALS_API_BASE = "http://localhost:5000/api/raw-materials/";
+const PRODUCTION_API_BASE = "http://localhost:5000/api/production/";
 
-  if (!productId) {
-    return <p className="rounded-md border border-dashed border-line px-3 py-6 text-center text-xs text-muted">{t("production.form.selectProductFirst")}</p>;
+// A single recipe / BOM line as it comes back attached to a product from
+// GET /api/products (see product.controller.js attachRecipes()).
+interface ApiRecipeItem {
+  material_id: number;
+  quantity: number | string;
+  material_name?: string;
+  unit?: string;
+}
+
+// Only the fields this page actually needs from a product.
+interface ApiProductLite {
+  product_id: number;
+  product_name: string;
+  recipe?: ApiRecipeItem[];
+}
+
+// From GET /api/employee/employee-name
+interface EmployeeOption {
+  employee_id: number;
+  name: string;
+}
+
+// From GET /api/raw-materials/invstock
+interface RawMaterialStock {
+  material_id: number;
+  material_name: string;
+  unit: string;
+  current_stock: number | string;
+}
+
+// From GET /api/production
+interface ProductionListItem {
+  production_id: number;
+  product_id: number;
+  product_name: string;
+  employee_id: number | null;
+  employee_name: string | null;
+  planned_quantity: number;
+  produced_quantity: number;
+  production_date: string;
+  status: "Planned" | "In Progress" | "Completed" | "Cancelled";
+  notes: string | null;
+}
+
+interface ProductionMaterialLine {
+  material_id: number;
+  material_name: string;
+  unit: string;
+  quantity_per_unit: number;
+  quantity_needed: number;
+  current_stock: number;
+}
+
+// From GET /api/production/:id — the list item plus the raw-material
+// breakdown needed to produce `planned_quantity` units.
+interface ProductionDetail extends ProductionListItem {
+  materials: ProductionMaterialLine[];
+}
+
+async function apiGetProducts(): Promise<ApiProductLite[]> {
+  const res = await fetch(PRODUCTS_API_BASE);
+  const json = await res.json();
+  console.log(json.data)
+  if (!json.success) throw new Error(json.message || "Failed to load products");
+  return json.data;
+}
+
+async function apiGetEmployeeOptions(): Promise<EmployeeOption[]> {
+  const res = await fetch(`${EMPLOYEE_API_BASE}employee-name`);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message || "Failed to load employees");
+  return json.data;
+}
+
+async function apiGetRawMaterialStock(): Promise<RawMaterialStock[]> {
+  const res = await fetch(`${RAW_MATERIALS_API_BASE}invstock`);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message || "Failed to load raw material stock");
+  return json.data;
+}
+
+async function apiGetProductionBatches(): Promise<ProductionListItem[]> {
+  const res = await fetch(PRODUCTION_API_BASE);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message || "Failed to load production batches");
+  return json.data;
+}
+
+async function apiGetProductionDetail(id: number): Promise<ProductionDetail> {
+  const res = await fetch(`${PRODUCTION_API_BASE}${id}`);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message || "Failed to load production batch");
+  return json.data;
+}
+
+async function apiCreateProduction(payload: {
+  product_id: number;
+  quantity: number;
+  employee_id: number;
+  date: string;
+}) {
+  const res = await fetch(PRODUCTION_API_BASE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  if (!res.ok || json.success === false) {
+    throw new Error(json.message || "Failed to create production batch");
   }
-  if (!recipe) return null;
+  return json;
+}
 
-  const rows = recipe.items.map((item) => {
-    const material = rawMaterials.find((m) => m.id === item.materialId)!;
-    const needed = Math.round(item.qtyPerUnit * quantity * 1000) / 1000;
-    const sufficient = material.currentStock >= needed;
-    return { material, needed, sufficient };
+async function apiCompleteProduction(id: number) {
+  const res = await fetch(`${PRODUCTION_API_BASE}${id}/complete`, { method: "POST" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.success === false) {
+    const shortageMsg =
+      Array.isArray(json.shortages) && json.shortages.length > 0
+        ? ` (${json.shortages
+            .map((s: any) => `${s.material_name}: need ${s.needed}${s.unit}, have ${s.available}${s.unit}`)
+            .join(", ")})`
+        : "";
+    throw new Error((json.message || "Failed to complete production batch") + shortageMsg);
+  }
+  return json;
+}
+
+// ---------------------------------------------------------------------------
+// Recipe preview — shown inside the create dialog, using the selected
+// product's recipe (from /api/products) and live stock (from
+// /api/raw-materials/invstock) to flag shortages before saving.
+// ---------------------------------------------------------------------------
+function RecipePreview({
+  product,
+  quantity,
+  stockMap,
+}: {
+  product: ApiProductLite | undefined;
+  quantity: number;
+  stockMap: Record<number, RawMaterialStock>;
+}) {
+  const { t } = useTranslation();
+
+  if (!product) {
+    return (
+      <p className="rounded-md border border-dashed border-line px-3 py-6 text-center text-xs text-muted">
+        {t("production.form.selectProductFirst")}
+      </p>
+    );
+  }
+
+  const recipeItems = product.recipe ?? [];
+  if (recipeItems.length === 0) {
+    return (
+      <p className="rounded-md border border-dashed border-line px-3 py-6 text-center text-xs text-muted">
+        {t("production.form.noRecipe") ?? "No raw materials are linked to this product yet."}
+      </p>
+    );
+  }
+
+  const rows = recipeItems.map((item) => {
+    const stock = stockMap[item.material_id];
+    const currentStock = stock ? Number(stock.current_stock) : 0;
+    const unit = item.unit ?? stock?.unit ?? "";
+    const name = item.material_name ?? stock?.material_name ?? `#${item.material_id}`;
+    const needed = Math.round(Number(item.quantity) * quantity * 1000) / 1000;
+    const sufficient = currentStock >= needed;
+    return { materialId: item.material_id, name, unit, needed, currentStock, sufficient };
   });
   const allSufficient = rows.every((r) => r.sufficient);
+  const firstShort = rows.find((r) => !r.sufficient);
 
   return (
     <div>
@@ -45,17 +206,23 @@ function RecipePreview({ productId, quantity }: { productId: string; quantity: n
           </thead>
           <tbody className="divide-y divide-line">
             {rows.map((r) => (
-              <tr key={r.material.id}>
-                <td className="px-3 py-2 text-ink">{r.material.name}</td>
+              <tr key={r.materialId}>
+                <td className="px-3 py-2 text-ink">{r.name}</td>
                 <td className="px-3 py-2 num text-ink">
-                  {r.needed} {r.material.unit}
-                  <span className="ml-1 text-[11px] text-muted">/ {r.material.currentStock} {t("common.of")}</span>
+                  {r.needed} {r.unit}
+                  <span className="ml-1 text-[11px] text-muted">
+                    / {r.currentStock} {t("common.of")}
+                  </span>
                 </td>
                 <td className="px-3 py-2">
                   {r.sufficient ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-success"><CheckCircle size={13} /> {t("common.inStock")}</span>
+                    <span className="inline-flex items-center gap-1 text-xs text-success">
+                      <CheckCircle size={13} /> {t("common.inStock")}
+                    </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-xs text-danger"><AlertTriangle size={13} /> {t("common.outOfStock")}</span>
+                    <span className="inline-flex items-center gap-1 text-xs text-danger">
+                      <AlertTriangle size={13} /> {t("common.outOfStock")}
+                    </span>
                   )}
                 </td>
               </tr>
@@ -63,17 +230,25 @@ function RecipePreview({ productId, quantity }: { productId: string; quantity: n
           </tbody>
         </table>
       </div>
-      <div className={`mt-2.5 flex items-start gap-2 rounded-md px-3 py-2 text-xs ${allSufficient ? "bg-success-bg text-success" : "bg-danger-bg text-danger"}`}>
-        {allSufficient ? <CheckCircle2 size={14} className="mt-0.5 shrink-0" /> : <AlertTriangle size={14} className="mt-0.5 shrink-0" />}
+      <div
+        className={`mt-2.5 flex items-start gap-2 rounded-md px-3 py-2 text-xs ${
+          allSufficient ? "bg-success-bg text-success" : "bg-danger-bg text-danger"
+        }`}
+      >
+        {allSufficient ? (
+          <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
+        ) : (
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+        )}
         <span>
           {allSufficient
             ? t("production.form.sufficientStock")
-            : rows.find((r) => !r.sufficient)
+            : firstShort
               ? t("production.form.insufficientStock", {
-                  material: rows.find((r) => !r.sufficient)!.material.name,
-                  needed: rows.find((r) => !r.sufficient)!.needed,
-                  available: rows.find((r) => !r.sufficient)!.material.currentStock,
-                  unit: rows.find((r) => !r.sufficient)!.material.unit,
+                  material: firstShort.name,
+                  needed: firstShort.needed,
+                  available: firstShort.currentStock,
+                  unit: firstShort.unit,
                 })
               : ""}
         </span>
@@ -82,44 +257,108 @@ function RecipePreview({ productId, quantity }: { productId: string; quantity: n
   );
 }
 
-function CreateProductionDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+// ---------------------------------------------------------------------------
+// Create production dialog
+// ---------------------------------------------------------------------------
+function CreateProductionDialog({
+  open,
+  onClose,
+  products,
+  employees,
+  stockMap,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  products: ApiProductLite[];
+  employees: EmployeeOption[];
+  stockMap: Record<number, RawMaterialStock>;
+  onCreated: () => void;
+}) {
   const { t } = useTranslation();
-  const { products, employees, createProduction } = useDataStore();
   const { toast } = useToast();
-  const [productId, setProductId] = useState("");
+  const [productId, setProductId] = useState<number | "">("");
   const [quantity, setQuantity] = useState(50);
-  const [employeeId, setEmployeeId] = useState("");
+  const [employeeId, setEmployeeId] = useState<number | "">("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = () => {
+  const selectedProduct = products.find((p) => p.product_id === productId);
+
+  const resetForm = () => {
+    setProductId("");
+    setQuantity(50);
+    setEmployeeId("");
+    setDate(new Date().toISOString().slice(0, 10));
+  };
+
+  const submit = async () => {
     if (!productId || !employeeId || quantity <= 0) return;
-    createProduction(productId, quantity, employeeId, date);
-    const product = products.find((p) => p.id === productId);
-    toast({ variant: "success", title: t("toast.createdTitle"), description: t("toast.createdDesc", { item: product?.name ?? "" }) });
-    setProductId(""); setQuantity(50); setEmployeeId("");
-    onClose();
+    setSubmitting(true);
+    try {
+      await apiCreateProduction({
+        product_id: Number(productId),
+        quantity,
+        employee_id: Number(employeeId),
+        date,
+      });
+      toast({
+        variant: "success",
+        title: t("toast.createdTitle"),
+        description: t("toast.createdDesc", { item: selectedProduct?.product_name ?? "" }),
+      });
+      resetForm();
+      onCreated();
+      onClose();
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={() => {
+        resetForm();
+        onClose();
+      }}
       title={t("production.createProduction")}
       size="lg"
       footer={
         <>
-          <Button variant="outline" onClick={onClose}>{t("common.cancel")}</Button>
-          <Button onClick={submit}>{t("common.save")}</Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              resetForm();
+              onClose();
+            }}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button onClick={submit} disabled={submitting}>
+            {t("common.save")}
+          </Button>
         </>
       }
     >
       <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
         <FieldGroup>
           <FieldLabel required>{t("production.form.product")}</FieldLabel>
-          <Select value={productId} onChange={(e) => setProductId(e.target.value)}>
+          <Select
+            value={productId}
+            onChange={(e) => setProductId(e.target.value ? Number(e.target.value) : "")}
+          >
             <option value="">{t("production.form.productPlaceholder")}</option>
             {products.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
+              <option key={p.product_id} value={p.product_id}>
+                {p.product_name}
+              </option>
             ))}
           </Select>
         </FieldGroup>
@@ -129,10 +368,15 @@ function CreateProductionDialog({ open, onClose }: { open: boolean; onClose: () 
         </FieldGroup>
         <FieldGroup>
           <FieldLabel required>{t("production.form.employee")}</FieldLabel>
-          <Select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
+          <Select
+            value={employeeId}
+            onChange={(e) => setEmployeeId(e.target.value ? Number(e.target.value) : "")}
+          >
             <option value="">{t("production.form.employeePlaceholder")}</option>
-            {employees.filter((e) => e.status === "active").map((e) => (
-              <option key={e.id} value={e.id}>{e.name}</option>
+            {employees.map((e) => (
+              <option key={e.employee_id} value={e.employee_id}>
+                {e.name}
+              </option>
             ))}
           </Select>
         </FieldGroup>
@@ -144,46 +388,100 @@ function CreateProductionDialog({ open, onClose }: { open: boolean; onClose: () 
       <FieldGroup className="sm:col-span-2">
         <FieldLabel>{t("production.form.recipe")}</FieldLabel>
         <p className="mb-2 text-xs text-muted">{t("production.form.recipeHint")}</p>
-        <RecipePreview productId={productId} quantity={quantity || 0} />
+        <RecipePreview product={selectedProduct} quantity={quantity || 0} stockMap={stockMap} />
       </FieldGroup>
     </Dialog>
   );
 }
 
-function ProductionDetailDialog({ batch, onClose }: { batch: ProductionBatch | null; onClose: () => void }) {
+// ---------------------------------------------------------------------------
+// Detail dialog — fetches the full breakdown on open; "Complete" is the only
+// action that deducts raw material stock (viewing alone never does).
+// ---------------------------------------------------------------------------
+function ProductionDetailDialog({
+  productionId,
+  onClose,
+  onCompleted,
+}: {
+  productionId: number | null;
+  onClose: () => void;
+  onCompleted: () => void;
+}) {
   const { t } = useTranslation();
-  const { products, employees, recipes, rawMaterials, completeProduction } = useDataStore();
   const { toast } = useToast();
+  const [detail, setDetail] = useState<ProductionDetail | null>(null);
+  const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [completing, setCompleting] = useState(false);
 
-  if (!batch) return null;
-  const product = products.find((p) => p.id === batch.productId);
-  const employee = employees.find((e) => e.id === batch.employeeId);
-  const recipe = recipes.find((r) => r.productId === batch.productId);
-
-  const handleComplete = () => {
-    const result = completeProduction(batch.id);
-    if (result.ok) {
-      toast({ variant: "success", title: t("toast.productionCompleteTitle"), description: t("toast.productionCompleteDesc") });
-      onClose();
-    } else {
-      toast({ variant: "error", title: t("toast.errorTitle"), description: t("toast.errorDesc") });
+  useEffect(() => {
+    if (productionId == null) {
+      setDetail(null);
+      setConfirming(false);
+      return;
     }
-    setConfirming(false);
+    let cancelled = false;
+    setLoading(true);
+    apiGetProductionDetail(productionId)
+      .then((data) => {
+        if (!cancelled) setDetail(data);
+      })
+      .catch((err) => {
+        toast({
+          variant: "error",
+          title: t("common.error"),
+          description: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productionId]);
+
+  const handleComplete = async () => {
+    if (!detail) return;
+    setCompleting(true);
+    try {
+      await apiCompleteProduction(detail.production_id);
+      toast({
+        variant: "success",
+        title: t("toast.productionCompleteTitle"),
+        description: t("toast.productionCompleteDesc"),
+      });
+      setConfirming(false);
+      onCompleted();
+      onClose();
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("toast.errorTitle"),
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setCompleting(false);
+    }
   };
 
   return (
     <Dialog
-      open={!!batch}
+      open={productionId != null}
       onClose={onClose}
-      title={t("production.detail.title", { id: batch.id })}
+      title={detail ? t("production.detail.title", { id: detail.production_id }) : ""}
       size="lg"
       footer={
-        batch.status !== "completed" ? (
+        detail && detail.status !== "Completed" ? (
           confirming ? (
             <>
-              <Button variant="outline" onClick={() => setConfirming(false)}>{t("common.cancel")}</Button>
-              <Button onClick={handleComplete}>{t("production.detail.confirmComplete")}</Button>
+              <Button variant="outline" onClick={() => setConfirming(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button onClick={handleComplete} disabled={completing}>
+                {t("production.detail.confirmComplete")}
+              </Button>
             </>
           ) : (
             <Button onClick={() => setConfirming(true)}>
@@ -193,83 +491,157 @@ function ProductionDetailDialog({ batch, onClose }: { batch: ProductionBatch | n
         ) : undefined
       }
     >
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div>
-          <p className="text-[11px] text-muted">{t("production.columns.product")}</p>
-          <p className="text-sm font-medium text-ink">{product?.name}</p>
-        </div>
-        <div>
-          <p className="text-[11px] text-muted">{t("production.columns.quantity")}</p>
-          <p className="num text-sm font-medium text-ink">{batch.quantity}</p>
-        </div>
-        <div>
-          <p className="text-[11px] text-muted">{t("production.columns.employee")}</p>
-          <p className="text-sm font-medium text-ink">{employee?.name}</p>
-        </div>
-        <div>
-          <p className="text-[11px] text-muted">{t("production.columns.date")}</p>
-          <p className="text-sm font-medium text-ink">{formatDate(batch.date)}</p>
-        </div>
-      </div>
-
-      {confirming && (
-        <div className="mb-4 flex items-start gap-2 rounded-md bg-warning-bg px-3 py-2.5 text-xs text-warning">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-          <div>
-            <p className="font-medium">{t("production.detail.confirmCompleteTitle")}</p>
-            <p className="mt-0.5">{t("production.detail.confirmCompleteDesc")}</p>
+      {loading || !detail ? (
+        <div className="p-6 text-center text-sm text-muted">{t("common.loading") || "Loading..."}</div>
+      ) : (
+        <>
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div>
+              <p className="text-[11px] text-muted">{t("production.columns.product")}</p>
+              <p className="text-sm font-medium text-ink">{detail.product_name}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted">{t("production.columns.quantity")}</p>
+              <p className="num text-sm font-medium text-ink">{detail.planned_quantity}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted">{t("production.columns.employee")}</p>
+              <p className="text-sm font-medium text-ink">{detail.employee_name ?? "—"}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted">{t("production.columns.date")}</p>
+              <p className="text-sm font-medium text-ink">{formatDate(detail.production_date)}</p>
+            </div>
           </div>
-        </div>
-      )}
 
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{t("production.detail.recipeUsed")}</p>
-      {recipe && (
-        <div className="overflow-hidden rounded-md border border-line">
-          <table className="w-full text-sm">
-            <thead className="bg-mist text-[11px] uppercase text-muted">
-              <tr>
-                <th className="px-3 py-2 text-left font-semibold">{t("rawMaterials.form.name")}</th>
-                <th className="px-3 py-2 text-left font-semibold">{t("production.columns.quantity")}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {recipe.items.map((item) => {
-                const material = rawMaterials.find((m) => m.id === item.materialId)!;
-                const needed = Math.round(item.qtyPerUnit * batch.quantity * 1000) / 1000;
-                return (
-                  <tr key={material.id}>
-                    <td className="px-3 py-2 text-ink">{material.name}</td>
-                    <td className="px-3 py-2 num text-ink">{needed} {material.unit}</td>
+          {confirming && (
+            <div className="mb-4 flex items-start gap-2 rounded-md bg-warning-bg px-3 py-2.5 text-xs text-warning">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium">{t("production.detail.confirmCompleteTitle")}</p>
+                <p className="mt-0.5">{t("production.detail.confirmCompleteDesc")}</p>
+              </div>
+            </div>
+          )}
+
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+            {t("production.detail.recipeUsed")}
+          </p>
+          {detail.materials.length > 0 && (
+            <div className="overflow-hidden rounded-md border border-line">
+              <table className="w-full text-sm">
+                <thead className="bg-mist text-[11px] uppercase text-muted">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-semibold">{t("rawMaterials.form.name")}</th>
+                    <th className="px-3 py-2 text-left font-semibold">{t("production.columns.quantity")}</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {detail.materials.map((m) => (
+                    <tr key={m.material_id}>
+                      <td className="px-3 py-2 text-ink">{m.material_name}</td>
+                      <td className="px-3 py-2 num text-ink">
+                        {m.quantity_needed} {m.unit}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </Dialog>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 export default function Production() {
   const { t } = useTranslation();
-  const { productionBatches, products, employees } = useDataStore();
+  const { toast } = useToast();
+
+  const [batches, setBatches] = useState<ProductionListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState<ApiProductLite[]>([]);
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [stock, setStock] = useState<RawMaterialStock[]>([]);
+
   const [createOpen, setCreateOpen] = useState(false);
-  const [selected, setSelected] = useState<ProductionBatch | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [status, setStatus] = useState("all");
 
-  const enriched = useMemo(
-    () =>
-      productionBatches.map((b) => ({
-        ...b,
-        productName: products.find((p) => p.id === b.productId)?.name ?? "",
-        employeeName: employees.find((e) => e.id === b.employeeId)?.name ?? "",
-      })),
-    [productionBatches, products, employees]
-  );
+  const stockMap = useMemo(() => {
+    const map: Record<number, RawMaterialStock> = {};
+    stock.forEach((s) => {
+      map[s.material_id] = s;
+    });
+    return map;
+  }, [stock]);
 
-  const filtered = enriched.filter((b) => status === "all" || b.status === status);
-  const table = useTableData(filtered, { searchFields: (b) => [b.id, b.productName], pageSize: 8 });
+  const loadBatches = async () => {
+    setLoading(true);
+    try {
+      const data = await apiGetProductionBatches();
+      setBatches(data);
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadFormData = async () => {
+    try {
+      const [productData, employeeData, stockData] = await Promise.all([
+        apiGetProducts(),
+        apiGetEmployeeOptions(),
+        apiGetRawMaterialStock(),
+      ]);
+      setProducts(productData);
+      setEmployees(employeeData);
+      setStock(stockData);
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  useEffect(() => {
+    loadBatches();
+    loadFormData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Completing a batch changes both the batch list and raw material stock,
+  // so refresh everything after a create or a complete.
+  const refreshAll = () => {
+    loadBatches();
+    loadFormData();
+  };
+
+  // The backend's production.status enum ('Planned' | 'In Progress' |
+  // 'Completed' | 'Cancelled') is mapped onto the three-value vocabulary the
+  // existing badge/filter UI already speaks, so nothing else has to change.
+  const toBadgeStatus = (s: ProductionListItem["status"]): "pending" | "inProgress" | "completed" => {
+    if (s === "Completed") return "completed";
+    if (s === "In Progress") return "inProgress";
+    return "pending"; // Planned, Cancelled
+  };
+
+  const filtered = batches.filter((b) => status === "all" || toBadgeStatus(b.status) === status);
+  const table = useTableData(filtered, {
+    searchFields: (b) => [String(b.production_id), b.product_name],
+    pageSize: 8,
+  });
 
   return (
     <div>
@@ -294,7 +666,9 @@ export default function Production() {
           </Select>
         </div>
 
-        {table.rows.length === 0 ? (
+        {loading ? (
+          <div className="p-10 text-center text-sm text-muted">{t("common.loading") || "Loading..."}</div>
+        ) : table.rows.length === 0 ? (
           <EmptyState title={t("common.noResults")} hint={t("common.noResultsHint")} />
         ) : (
           <TableWrap>
@@ -303,11 +677,19 @@ export default function Production() {
                 <TR>
                   <TH>{t("production.columns.id")}</TH>
                   <TH>{t("production.columns.product")}</TH>
-                  <TH sortable sortDir={table.sortKey === "quantity" ? table.sortDir : null} onClick={() => table.toggleSort("quantity")}>
+                  <TH
+                    sortable
+                    sortDir={table.sortKey === "planned_quantity" ? table.sortDir : null}
+                    onClick={() => table.toggleSort("planned_quantity")}
+                  >
                     {t("production.columns.quantity")}
                   </TH>
                   <TH>{t("production.columns.employee")}</TH>
-                  <TH sortable sortDir={table.sortKey === "date" ? table.sortDir : null} onClick={() => table.toggleSort("date")}>
+                  <TH
+                    sortable
+                    sortDir={table.sortKey === "production_date" ? table.sortDir : null}
+                    onClick={() => table.toggleSort("production_date")}
+                  >
                     {t("production.columns.date")}
                   </TH>
                   <TH>{t("production.columns.status")}</TH>
@@ -316,16 +698,23 @@ export default function Production() {
               </THead>
               <TBody>
                 {table.rows.map((b) => (
-                  <TR key={b.id}>
-                    <TD className="num font-medium">{b.id}</TD>
-                    <TD>{b.productName}</TD>
-                    <TD className="num">{b.quantity}</TD>
-                    <TD className="text-muted">{b.employeeName}</TD>
-                    <TD className="text-muted">{formatDate(b.date)}</TD>
-                    <TD><ProductionStatusBadge status={b.status} /></TD>
+                  <TR key={b.production_id}>
+                    <TD className="num font-medium">{b.production_id}</TD>
+                    <TD>{b.product_name}</TD>
+                    <TD className="num">{b.planned_quantity}</TD>
+                    <TD className="text-muted">{b.employee_name ?? "—"}</TD>
+                    <TD className="text-muted">{formatDate(b.production_date)}</TD>
+                    <TD>
+                      <ProductionStatusBadge status={toBadgeStatus(b.status)} />
+                    </TD>
                     <TD>
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => setSelected(b)} aria-label={t("common.view")}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setSelectedId(b.production_id)}
+                          aria-label={t("common.view")}
+                        >
                           <Eye size={15} />
                         </Button>
                       </div>
@@ -336,11 +725,28 @@ export default function Production() {
             </Table>
           </TableWrap>
         )}
-        <Pagination page={table.page} totalPages={table.totalPages} onChange={table.setPage} totalItems={table.totalItems} pageSize={table.pageSize} />
+        <Pagination
+          page={table.page}
+          totalPages={table.totalPages}
+          onChange={table.setPage}
+          totalItems={table.totalItems}
+          pageSize={table.pageSize}
+        />
       </Card>
 
-      <CreateProductionDialog open={createOpen} onClose={() => setCreateOpen(false)} />
-      <ProductionDetailDialog batch={selected} onClose={() => setSelected(null)} />
+      <CreateProductionDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        products={products}
+        employees={employees}
+        stockMap={stockMap}
+        onCreated={refreshAll}
+      />
+      <ProductionDetailDialog
+        productionId={selectedId}
+        onClose={() => setSelectedId(null)}
+        onCompleted={refreshAll}
+      />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
@@ -39,6 +39,16 @@ import { formatCurrency } from "../lib/utils";
 // API config
 // ---------------------------------------------------------------------------
 const API_BASE = "http://localhost:5000/api/products/";
+const INVENTORY_API_BASE = "http://localhost:5000/api/raw-materials/";
+
+// A single BOM / recipe line as it comes back attached to a product.
+interface ApiRecipeItem {
+  recipe_id?: number;
+  material_id: number;
+  quantity: string | number;
+  material_name?: string;
+  unit?: string;
+}
 
 // Raw shape returned by GET /api/products
 interface ApiProduct {
@@ -57,6 +67,17 @@ interface ApiProduct {
   inventory_id: number;
   stock_quantity: number;
   stock_last_updated: string;
+  recipe?: ApiRecipeItem[];
+}
+
+// Option shown in the "raw material" dropdown, from
+// GET http://localhost:5000/api/inventory/rawmaterialsname
+// Expected response shape:
+// { success: true, data: [{ material_id: 1, material_name: "Flour", unit: "kg" }, ...] }
+interface RawMaterialOption {
+  material_id: number;
+  material_name: string;
+  unit: string;
 }
 
 async function apiGetProducts(): Promise<ApiProduct[]> {
@@ -118,6 +139,13 @@ async function apiSetStock(id: number, stock_quantity: number) {
   return json;
 }
 
+async function apiGetRawMaterialOptions(): Promise<RawMaterialOption[]> {
+  const res = await fetch(`${INVENTORY_API_BASE}rawmaterialsname`);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message || "Failed to load raw materials");
+  return json.data;
+}
+
 // ---------------------------------------------------------------------------
 // Form schema
 // ---------------------------------------------------------------------------
@@ -134,6 +162,12 @@ function useProductSchema() {
     weight: z.number().nonnegative(t("validation.mustBeNonNegative")),
     minimum_stock: z.number().nonnegative(t("validation.mustBeNonNegative")),
     status: z.enum(["Active", "Inactive"]),
+    recipe: z.array(
+      z.object({
+        material_id: z.number().positive(t("validation.requiredField")),
+        quantity: z.number().positive(t("validation.mustBePositive")),
+      })
+    ),
   });
 }
 
@@ -147,12 +181,14 @@ function ProductFormDialog({
   onClose,
   editing,
   categoryOptions,
+  rawMaterialOptions,
   onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   editing: ApiProduct | null;
   categoryOptions: { category_id: number; category_name: string }[];
+  rawMaterialOptions: RawMaterialOption[];
   onSaved: () => void;
 }) {
   const { t } = useTranslation();
@@ -161,6 +197,7 @@ function ProductFormDialog({
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     formState: { errors, isSubmitting },
@@ -178,6 +215,10 @@ function ProductFormDialog({
           weight: Number(editing.weight),
           minimum_stock: editing.minimum_stock,
           status: editing.status,
+          recipe: (editing.recipe ?? []).map((r) => ({
+            material_id: r.material_id,
+            quantity: Number(r.quantity),
+          })),
         }
       : {
           product_name: "",
@@ -190,20 +231,29 @@ function ProductFormDialog({
           weight: 0,
           minimum_stock: 10,
           status: "Active",
+          recipe: [],
         },
   });
 
+  const { fields, append, remove } = useFieldArray({ control, name: "recipe" });
+
   const onSubmit = async (values: ProductFormValues) => {
+    // Drop any placeholder rows the user added but never filled in.
+    const payload = {
+      ...values,
+      recipe: values.recipe.filter((r) => r.material_id > 0 && r.quantity > 0),
+    };
+
     try {
       if (editing) {
-        await apiUpdateProduct(editing.product_id, values);
+        await apiUpdateProduct(editing.product_id, payload);
         toast({
           variant: "success",
           title: t("toast.updatedTitle"),
           description: t("toast.updatedDesc", { item: values.product_name }),
         });
       } else {
-        await apiCreateProduct(values);
+        await apiCreateProduct(payload);
         toast({
           variant: "success",
           title: t("toast.createdTitle"),
@@ -342,6 +392,77 @@ function ProductFormDialog({
             <option value="Inactive">{t("common.inactive")}</option>
           </Select>
         </FieldGroup>
+
+        {/* Raw materials needed to produce one unit of this product (product_recipe / BOM) */}
+        <FieldGroup className="sm:col-span-2">
+          <FieldLabel>{t("products.form.rawMaterialsNeeded") ?? "Raw materials needed"}</FieldLabel>
+
+          {fields.length === 0 && (
+            <p className="mb-2 text-xs text-muted">
+              {t("products.form.noMaterialsYet") ?? "No raw materials added yet."}
+            </p>
+          )}
+
+          <div className="space-y-2">
+            {fields.map((field, index) => (
+              <div key={field.id} className="grid grid-cols-[1fr_120px_32px] items-end gap-2">
+                <FieldGroup className="mb-0">
+                  {index === 0 && (
+                    <FieldLabel>{t("products.form.rawMaterial") ?? "Raw material"}</FieldLabel>
+                  )}
+                  <Select
+                    invalid={!!errors.recipe?.[index]?.material_id}
+                    {...register(`recipe.${index}.material_id`, { valueAsNumber: true })}
+                  >
+                    <option value={0}>
+                      {rawMaterialOptions.length === 0
+                        ? t("common.loading") || "Loading..."
+                        : t("common.select") ?? "Select..."}
+                    </option>
+                    {rawMaterialOptions.map((rm) => (
+                      <option key={rm.material_id} value={rm.material_id}>
+                        {rm.material_name} ({rm.unit})
+                      </option>
+                    ))}
+                  </Select>
+                  <FieldError>{errors.recipe?.[index]?.material_id?.message}</FieldError>
+                </FieldGroup>
+                <FieldGroup className="mb-0">
+                  {index === 0 && (
+                    <FieldLabel>{t("products.form.quantityNeeded") ?? "Qty needed"}</FieldLabel>
+                  )}
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder={t("products.form.quantityNeeded") ?? "Qty needed"}
+                    invalid={!!errors.recipe?.[index]?.quantity}
+                    {...register(`recipe.${index}.quantity`, { valueAsNumber: true })}
+                  />
+                  <FieldError>{errors.recipe?.[index]?.quantity?.message}</FieldError>
+                </FieldGroup>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => remove(index)}
+                  aria-label={t("common.delete")}
+                >
+                  <Trash2 size={15} className="text-danger" />
+                </Button>
+              </div>
+            ))}
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            onClick={() => append({ material_id: 0, quantity: 0 })}
+          >
+            <Plus size={14} /> {t("products.form.addMaterial") ?? "Add raw material"}
+          </Button>
+        </FieldGroup>
       </form>
     </Dialog>
   );
@@ -356,6 +477,8 @@ export default function Products() {
 
   const [products, setProducts] = useState<ApiProduct[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [rawMaterialOptions, setRawMaterialOptions] = useState<RawMaterialOption[]>([]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ApiProduct | null>(null);
@@ -384,8 +507,22 @@ export default function Products() {
     }
   };
 
+  const loadRawMaterialOptions = async () => {
+    try {
+      const data = await apiGetRawMaterialOptions();
+      setRawMaterialOptions(data);
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
   useEffect(() => {
     loadProducts();
+    loadRawMaterialOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -624,6 +761,7 @@ export default function Products() {
         onClose={() => setDialogOpen(false)}
         editing={editing}
         categoryOptions={categoryOptions}
+        rawMaterialOptions={rawMaterialOptions}
         onSaved={loadProducts}
       />
 
