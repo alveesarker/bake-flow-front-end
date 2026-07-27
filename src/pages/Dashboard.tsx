@@ -17,7 +17,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "../components/ui/Card"
 import { Badge, StockBadge } from "../components/ui/Badge";
 import { PageHeader } from "../components/ui/Misc";
 import { formatCurrency, formatNumber, formatDate } from "../lib/utils";
-import { monthlySalesTrend, expenseBreakdown } from "../data/seed";
+import { monthlySalesTrend } from "../data/seed";
 import type { ReactNode } from "react";
 
 function StatCard({ icon, label, value, sub }: { icon: ReactNode; label: string; value: string; sub?: string }) {
@@ -111,41 +111,6 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("dashboard.expenseChart")}</CardTitle>
-          </CardHeader>
-          <CardContent className="h-[200px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={expenseBreakdown}
-                  dataKey="value"
-                  nameKey="category"
-                  innerRadius={50}
-                  outerRadius={78}
-                  paddingAngle={2}
-                >
-                  {expenseBreakdown.map((_, i) => (
-                    <Cell key={i} fill={pieColors[i % pieColors.length]} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  formatter={(v, _n, entry) => [formatCurrency(Number(v)), t(`expenses.categories.${(entry as { payload: { category: string } }).payload.category}`)]}
-                  contentStyle={{ borderRadius: 10, border: "1px solid #E5E5E5", fontSize: 12 }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="mt-4 flex flex-wrap gap-x-3 gap-y-1.5">
-              {expenseBreakdown.map((e, i) => (
-                <div key={e.category} className="flex items-center gap-1.5 text-[11px] text-muted">
-                  <span className="h-2 w-2 rounded-full" style={{ background: pieColors[i % pieColors.length] }} />
-                  {t(`expenses.categories.${e.category}`)}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
