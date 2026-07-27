@@ -21,15 +21,6 @@ import {
   Pagination,
   SearchInput,
 } from "../components/ui/Misc";
-import {
-  Table,
-  TableWrap,
-  TBody,
-  TD,
-  TH,
-  THead,
-  TR,
-} from "../components/ui/Table";
 import { useTableData } from "../hooks/useTableData";
 import { useToast } from "../hooks/useToast";
 import { useTranslation } from "../i18n/I18nContext";
@@ -78,6 +69,24 @@ interface RawMaterialOption {
   material_id: number;
   material_name: string;
   unit: string;
+}
+
+// ---------------------------------------------------------------------------
+// Product category icon helper
+// ---------------------------------------------------------------------------
+function getCategoryIcon(category: string) {
+  const categoryIcons: Record<string, string> = {
+    Beverages: "🥤",
+    Biscuit: "🍪",
+    Bread: "🍞",
+    Cake: "🎂",
+    Cookies: "🍪",
+    "Frozen Food": "🧊",
+    Pastry: "🥐",
+    Snacks: "🍿",
+  };
+
+  return categoryIcons[category] ?? "🍽️";
 }
 
 async function apiGetProducts(): Promise<ApiProduct[]> {
@@ -142,7 +151,8 @@ async function apiSetStock(id: number, stock_quantity: number) {
 async function apiGetRawMaterialOptions(): Promise<RawMaterialOption[]> {
   const res = await fetch(`${INVENTORY_API_BASE}rawmaterialsname`);
   const json = await res.json();
-  if (!json.success) throw new Error(json.message || "Failed to load raw materials");
+  if (!json.success)
+    throw new Error(json.message || "Failed to load raw materials");
   return json.data;
 }
 
@@ -166,7 +176,7 @@ function useProductSchema() {
       z.object({
         material_id: z.number().positive(t("validation.requiredField")),
         quantity: z.number().positive(t("validation.mustBePositive")),
-      })
+      }),
     ),
   });
 }
@@ -395,29 +405,39 @@ function ProductFormDialog({
 
         {/* Raw materials needed to produce one unit of this product (product_recipe / BOM) */}
         <FieldGroup className="sm:col-span-2">
-          <FieldLabel>{t("products.form.rawMaterialsNeeded") ?? "Raw materials needed"}</FieldLabel>
+          <FieldLabel>
+            {t("products.form.rawMaterialsNeeded") ?? "Raw materials needed"}
+          </FieldLabel>
 
           {fields.length === 0 && (
             <p className="mb-2 text-xs text-muted">
-              {t("products.form.noMaterialsYet") ?? "No raw materials added yet."}
+              {t("products.form.noMaterialsYet") ??
+                "No raw materials added yet."}
             </p>
           )}
 
           <div className="space-y-2">
             {fields.map((field, index) => (
-              <div key={field.id} className="grid grid-cols-[1fr_120px_32px] items-end gap-2">
+              <div
+                key={field.id}
+                className="grid grid-cols-[1fr_120px_32px] items-end gap-2"
+              >
                 <FieldGroup className="mb-0">
                   {index === 0 && (
-                    <FieldLabel>{t("products.form.rawMaterial") ?? "Raw material"}</FieldLabel>
+                    <FieldLabel>
+                      {t("products.form.rawMaterial") ?? "Raw material"}
+                    </FieldLabel>
                   )}
                   <Select
                     invalid={!!errors.recipe?.[index]?.material_id}
-                    {...register(`recipe.${index}.material_id`, { valueAsNumber: true })}
+                    {...register(`recipe.${index}.material_id`, {
+                      valueAsNumber: true,
+                    })}
                   >
                     <option value={0}>
                       {rawMaterialOptions.length === 0
                         ? t("common.loading") || "Loading..."
-                        : t("common.select") ?? "Select..."}
+                        : (t("common.select") ?? "Select...")}
                     </option>
                     {rawMaterialOptions.map((rm) => (
                       <option key={rm.material_id} value={rm.material_id}>
@@ -425,20 +445,30 @@ function ProductFormDialog({
                       </option>
                     ))}
                   </Select>
-                  <FieldError>{errors.recipe?.[index]?.material_id?.message}</FieldError>
+                  <FieldError>
+                    {errors.recipe?.[index]?.material_id?.message}
+                  </FieldError>
                 </FieldGroup>
                 <FieldGroup className="mb-0">
                   {index === 0 && (
-                    <FieldLabel>{t("products.form.quantityNeeded") ?? "Qty needed"}</FieldLabel>
+                    <FieldLabel>
+                      {t("products.form.quantityNeeded") ?? "Qty needed"}
+                    </FieldLabel>
                   )}
                   <Input
                     type="number"
                     step="0.01"
-                    placeholder={t("products.form.quantityNeeded") ?? "Qty needed"}
+                    placeholder={
+                      t("products.form.quantityNeeded") ?? "Qty needed"
+                    }
                     invalid={!!errors.recipe?.[index]?.quantity}
-                    {...register(`recipe.${index}.quantity`, { valueAsNumber: true })}
+                    {...register(`recipe.${index}.quantity`, {
+                      valueAsNumber: true,
+                    })}
                   />
-                  <FieldError>{errors.recipe?.[index]?.quantity?.message}</FieldError>
+                  <FieldError>
+                    {errors.recipe?.[index]?.quantity?.message}
+                  </FieldError>
                 </FieldGroup>
                 <Button
                   type="button"
@@ -460,7 +490,8 @@ function ProductFormDialog({
             className="mt-2"
             onClick={() => append({ material_id: 0, quantity: 0 })}
           >
-            <Plus size={14} /> {t("products.form.addMaterial") ?? "Add raw material"}
+            <Plus size={14} />{" "}
+            {t("products.form.addMaterial") ?? "Add raw material"}
           </Button>
         </FieldGroup>
       </form>
@@ -478,7 +509,9 @@ export default function Products() {
   const [products, setProducts] = useState<ApiProduct[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [rawMaterialOptions, setRawMaterialOptions] = useState<RawMaterialOption[]>([]);
+  const [rawMaterialOptions, setRawMaterialOptions] = useState<
+    RawMaterialOption[]
+  >([]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ApiProduct | null>(null);
@@ -658,93 +691,101 @@ export default function Products() {
             hint={t("common.noResultsHint")}
           />
         ) : (
-          <TableWrap>
-            <Table>
-              <THead>
-                <TR>
-                  <TH
-                    sortable
-                    sortDir={
-                      table.sortKey === "product_name" ? table.sortDir : null
-                    }
-                    onClick={() => table.toggleSort("product_name")}
+          <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-3 lg:grid-cols-4 border-[black]">
+            {table.rows.map((p) => (
+              <Card
+                key={p.product_id}
+                className="group relative overflow-hidden p-4 transition hover:shadow-md"
+              >
+                {/* Header */}
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl border-[2px] text-2xl">
+                      {getCategoryIcon(p.category_name)}
+                    </div>
+
+                    <div>
+                      <h3 className="font-semibold">{p.product_name}</h3>
+
+                      <p className="text-sm text-muted">{p.product_code}</p>
+                    </div>
+                  </div>
+
+                  <span
+                    className={`rounded-full px-2 py-1 text-xs ${
+                      p.status === "Active"
+                        ? "bg-green-100 text-green-700"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
                   >
-                    {t("products.columns.name")}
-                  </TH>
-                  <TH>{t("products.columns.code")}</TH>
-                  <TH>{t("products.columns.category")}</TH>
-                  <TH
-                    sortable
-                    sortDir={
-                      table.sortKey === "customer_price" ? table.sortDir : null
-                    }
-                    onClick={() => table.toggleSort("customer_price")}
-                  >
-                    {t("products.columns.customerPrice")}
-                  </TH>
-                  <TH>{t("products.columns.distributorPrice")}</TH>
-                  <TH
-                    sortable
-                    sortDir={
-                      table.sortKey === "stock_quantity" ? table.sortDir : null
-                    }
-                    onClick={() => table.toggleSort("stock_quantity")}
-                  >
-                    {t("products.columns.stock")}
-                  </TH>
-                  <TH className="text-right">{t("common.actions")}</TH>
-                </TR>
-              </THead>
-              <TBody>
-                {table.rows.map((p) => (
-                  <TR key={p.product_id}>
-                    <TD className="font-medium">{p.product_name}</TD>
-                    <TD className="text-muted num">{p.product_code}</TD>
-                    <TD className="text-muted">{p.category_name}</TD>
-                    <TD className="num">
+                    {p.status}
+                  </span>
+                </div>
+
+                {/* Product details */}
+                <div className="mt-4 space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted">
+                      {t("products.columns.category")}
+                    </span>
+                    <span>{p.category_name}</span>
+                  </div>
+
+                  <div className="flex justify-between">
+                    <span className="text-muted">
+                      {t("products.columns.price")}
+                    </span>
+
+                    <span className="font-medium num">
                       {formatCurrency(Number(p.customer_price))}
-                    </TD>
-                    <TD className="num text-muted">
-                      {formatCurrency(Number(p.distributor_price))}
-                    </TD>
-                    <TD>
-                      <span className="num">{p.stock_quantity}</span>
-                    </TD>
-                    <TD>
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openAdjustDialog(p)}
-                        >
-                          {t("productInventory.adjustStock")}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => {
-                            setEditing(p);
-                            setDialogOpen(true);
-                          }}
-                          aria-label={t("common.edit")}
-                        >
-                          <Pencil size={15} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setDeleting(p)}
-                          aria-label={t("common.delete")}
-                        >
-                          <Trash2 size={15} className="text-danger" />
-                        </Button>
-                      </div>
-                    </TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
-          </TableWrap>
+                    </span>
+                  </div>
+
+                  <div className="flex justify-between">
+                    <span className="text-muted">
+                      {t("products.columns.stock")}
+                    </span>
+
+                    <span className="font-medium num">{p.stock_quantity}</span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="mt-4 flex justify-between gap-1 border-t pt-3">
+                  <div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openAdjustDialog(p)}
+                    >
+                      {t("productInventory.adjustStock")}
+                    </Button>
+                  </div>
+
+                  <div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => {
+                        setEditing(p);
+                        setDialogOpen(true);
+                      }}
+                    >
+                      <Pencil size={15} />
+                    </Button>
+
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setDeleting(p)}
+                    >
+                      <Trash2 size={15} className="text-danger" />
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
         )}
 
         <Pagination

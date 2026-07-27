@@ -162,6 +162,7 @@ const en = {
     editProduct: "Edit Product",
     searchPlaceholder: "Search products by name or code…",
     columns: {
+      price: "Price",
       image: "Image",
       name: "Product Name",
       code: "Product Code",

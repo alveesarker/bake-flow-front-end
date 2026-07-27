@@ -115,7 +115,7 @@ export default function Dashboard() {
           <CardHeader>
             <CardTitle>{t("dashboard.expenseChart")}</CardTitle>
           </CardHeader>
-          <CardContent className="h-64">
+          <CardContent className="h-[200px]">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -136,7 +136,7 @@ export default function Dashboard() {
                 />
               </PieChart>
             </ResponsiveContainer>
-            <div className="-mt-2 flex flex-wrap gap-x-3 gap-y-1.5">
+            <div className="mt-4 flex flex-wrap gap-x-3 gap-y-1.5">
               {expenseBreakdown.map((e, i) => (
                 <div key={e.category} className="flex items-center gap-1.5 text-[11px] text-muted">
                   <span className="h-2 w-2 rounded-full" style={{ background: pieColors[i % pieColors.length] }} />
