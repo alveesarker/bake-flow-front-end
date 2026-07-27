@@ -187,9 +187,17 @@ export const distributorSales: DistributorSale[] = [
 export const monthlySalesTrend = [
   { month: "Feb", value: 412000 },
   { month: "Mar", value: 455000 },
+  { month: "Mar", value: 455000 },
+  { month: "Apr", value: 398000 },
+  { month: "Apr", value: 398000 },
+  { month: "Apr", value: 398000 },
   { month: "Apr", value: 398000 },
   { month: "May", value: 512000 },
+  { month: "May", value: 512000 },
+  { month: "May", value: 512000 },
   { month: "Jun", value: 561000 },
+  { month: "Jun", value: 561000 },
+  { month: "Jul", value: 498000 },
   { month: "Jul", value: 498000 },
 ];
 
