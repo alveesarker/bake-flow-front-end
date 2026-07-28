@@ -134,7 +134,6 @@ export default function RawMaterialInventory() {
               {history.map((h) => (
                 <div key={h.id} className="flex items-center justify-between rounded-md border border-line px-3 py-2.5 text-[13px]">
                   <div>
-                    <p className="text-ink">{h.reason}</p>
                     <p className="text-[11px] text-muted">{formatDate(h.date)}</p>
                   </div>
                   <span className={h.type === "increase" ? "text-success" : "text-danger"}>

@@ -1,57 +1,184 @@
-import { useState } from "react";
-import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { Plus, Pencil, Trash2 } from "lucide-react";
-import { useTranslation } from "../i18n/I18nContext";
-import { useDataStore } from "../store/DataStore";
-import { useToast } from "../hooks/useToast";
-import { useTableData } from "../hooks/useTableData";
-import { PageHeader, SearchInput, EmptyState, Pagination, ConfirmDialog } from "../components/ui/Misc";
-import { Card } from "../components/ui/Card";
-import { Button } from "../components/ui/Button";
-import { Dialog } from "../components/ui/Dialog";
-import { FieldGroup, FieldLabel, FieldError, Input, Select } from "../components/ui/Field";
 import { StatusBadge } from "../components/ui/Badge";
-import { Table, THead, TBody, TR, TH, TD, TableWrap } from "../components/ui/Table";
+import { Button } from "../components/ui/Button";
+import { Card } from "../components/ui/Card";
+import { Dialog } from "../components/ui/Dialog";
+import type { Status} from "../types";
+import {
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  Input,
+  Select,
+  Textarea,
+} from "../components/ui/Field";
+import {
+  ConfirmDialog,
+  EmptyState,
+  PageHeader,
+  Pagination,
+  SearchInput,
+} from "../components/ui/Misc";
+import {
+  Table,
+  TableWrap,
+  TBody,
+  TD,
+  TH,
+  THead,
+  TR,
+} from "../components/ui/Table";
+import { useTableData } from "../hooks/useTableData";
+import { useToast } from "../hooks/useToast";
+import { useTranslation } from "../i18n/I18nContext";
 import { formatCurrency, formatDate } from "../lib/utils";
-import type { Employee } from "../types";
 
-const designations = ["baker", "supervisor", "cashier", "manager", "helper", "delivery"] as const;
+const API_BASE_URL = "http://localhost:5000/api";
+
+// Matches the `employee` table in the database
+interface Employee {
+  employee_id: number;
+  name: string;
+  phone: string | null;
+  address: string | null;
+  designation: string | null;
+  salary: number | null;
+  joining_date: string | null;
+  status: "Active" | "Inactive";
+}
 
 function useEmployeeSchema() {
   const { t } = useTranslation();
   return z.object({
     name: z.string().min(2, t("validation.tooShort")),
     phone: z.string().min(6, t("validation.invalidPhone")),
-    designation: z.enum(designations),
+    address: z.string().optional(),
+    designation: z.string().min(1, t("validation.requiredField")),
     salary: z.number().positive(t("validation.mustBePositive")),
-    joiningDate: z.string().min(1, t("validation.requiredField")),
-    status: z.enum(["active", "inactive"]),
+    joining_date: z.string().min(1, t("validation.requiredField")),
+    status: z.enum(["Active", "Inactive"]),
   });
 }
 type EmployeeFormValues = z.infer<ReturnType<typeof useEmployeeSchema>>;
 
-function EmployeeFormDialog({ open, onClose, editing }: { open: boolean; onClose: () => void; editing: Employee | null }) {
+// ---- API helpers ----
+
+async function apiGetEmployees(): Promise<Employee[]> {
+  const res = await fetch(`${API_BASE_URL}/employee`);
+  if (!res.ok) throw new Error("Failed to fetch employee");
+  return res.json();
+}
+
+async function apiAddEmployee(values: EmployeeFormValues): Promise<Employee> {
+  const res = await fetch(`${API_BASE_URL}/employee`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(values),
+  });
+  if (!res.ok) throw new Error("Failed to add employee");
+  return res.json();
+}
+
+async function apiUpdateEmployee(
+  id: number,
+  values: EmployeeFormValues,
+): Promise<Employee> {
+  const res = await fetch(`${API_BASE_URL}/employee/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(values),
+  });
+  if (!res.ok) throw new Error("Failed to update employee");
+  return res.json();
+}
+
+async function apiDeleteEmployee(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/employee/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete employee");
+}
+
+function EmployeeFormDialog({
+  open,
+  onClose,
+  editing,
+  onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  editing: Employee | null;
+  onSaved: () => void;
+}) {
   const { t } = useTranslation();
-  const { addEmployee, updateEmployee } = useDataStore();
   const { toast } = useToast();
   const schema = useEmployeeSchema();
-  const { register, handleSubmit, reset, formState: { errors } } = useForm<EmployeeFormValues>({
+  const [submitting, setSubmitting] = useState(false);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<EmployeeFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: editing ?? { name: "", phone: "", designation: "baker", salary: 15000, joiningDate: new Date().toISOString().slice(0, 10), status: "active" },
+    defaultValues: editing
+      ? {
+          name: editing.name,
+          phone: editing.phone ?? "",
+          address: editing.address ?? "",
+          designation: editing.designation ?? "",
+          salary: editing.salary ?? 0,
+          joining_date: editing.joining_date
+            ? editing.joining_date.slice(0, 10)
+            : "",
+          status: editing.status,
+        }
+      : {
+          name: "",
+          phone: "",
+          address: "",
+          designation: "",
+          salary: 15000,
+          joining_date: new Date().toISOString().slice(0, 10),
+          status: "Active",
+        },
   });
 
-  const onSubmit = (values: EmployeeFormValues) => {
-    if (editing) {
-      updateEmployee(editing.id, values);
-      toast({ variant: "success", title: t("toast.updatedTitle"), description: t("toast.updatedDesc", { item: values.name }) });
-    } else {
-      addEmployee(values);
-      toast({ variant: "success", title: t("toast.createdTitle"), description: t("toast.createdDesc", { item: values.name }) });
+  const onSubmit = async (values: EmployeeFormValues) => {
+    setSubmitting(true);
+    try {
+      if (editing) {
+        await apiUpdateEmployee(editing.employee_id, values);
+        toast({
+          variant: "success",
+          title: t("toast.updatedTitle"),
+          description: t("toast.updatedDesc", { item: values.name }),
+        });
+      } else {
+        await apiAddEmployee(values);
+        toast({
+          variant: "success",
+          title: t("toast.createdTitle"),
+          description: t("toast.createdDesc", { item: values.name }),
+        });
+      }
+      reset();
+      onSaved();
+      onClose();
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: (err as Error).message,
+      });
+    } finally {
+      setSubmitting(false);
     }
-    reset();
-    onClose();
   };
 
   return (
@@ -61,8 +188,18 @@ function EmployeeFormDialog({ open, onClose, editing }: { open: boolean; onClose
       title={editing ? t("employees.editEmployee") : t("employees.addEmployee")}
       footer={
         <>
-          <Button variant="outline" onClick={() => { reset(); onClose(); }}>{t("common.cancel")}</Button>
-          <Button onClick={handleSubmit(onSubmit)}>{t("common.save")}</Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              reset();
+              onClose();
+            }}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button onClick={handleSubmit(onSubmit)} disabled={submitting}>
+            {t("common.save")}
+          </Button>
         </>
       }
     >
@@ -80,29 +217,42 @@ function EmployeeFormDialog({ open, onClose, editing }: { open: boolean; onClose
           </FieldGroup>
           <FieldGroup>
             <FieldLabel required>{t("employees.form.designation")}</FieldLabel>
-            <Select {...register("designation")}>
-              {designations.map((d) => (
-                <option key={d} value={d}>{t(`employees.designations.${d}`)}</option>
-              ))}
-            </Select>
+            <Input
+              invalid={!!errors.designation}
+              {...register("designation")}
+            />
+            <FieldError>{errors.designation?.message}</FieldError>
           </FieldGroup>
         </div>
+        <FieldGroup>
+          <FieldLabel>{t("employees.form.address")}</FieldLabel>
+          <Textarea rows={2} {...register("address")} />
+        </FieldGroup>
         <div className="grid grid-cols-2 gap-3">
           <FieldGroup>
             <FieldLabel required>{t("employees.form.salary")}</FieldLabel>
-            <Input type="number" invalid={!!errors.salary} {...register("salary", { valueAsNumber: true })} />
+            <Input
+              type="number"
+              invalid={!!errors.salary}
+              {...register("salary", { valueAsNumber: true })}
+            />
             <FieldError>{errors.salary?.message}</FieldError>
           </FieldGroup>
           <FieldGroup>
             <FieldLabel required>{t("employees.form.joiningDate")}</FieldLabel>
-            <Input type="date" invalid={!!errors.joiningDate} {...register("joiningDate")} />
+            <Input
+              type="date"
+              invalid={!!errors.joining_date}
+              {...register("joining_date")}
+            />
+            <FieldError>{errors.joining_date?.message}</FieldError>
           </FieldGroup>
         </div>
         <FieldGroup className="mb-0">
           <FieldLabel>{t("employees.form.status")}</FieldLabel>
           <Select {...register("status")}>
-            <option value="active">{t("common.active")}</option>
-            <option value="inactive">{t("common.inactive")}</option>
+            <option value="Active">{t("common.active")}</option>
+            <option value="Inactive">{t("common.inactive")}</option>
           </Select>
         </FieldGroup>
       </form>
@@ -112,46 +262,143 @@ function EmployeeFormDialog({ open, onClose, editing }: { open: boolean; onClose
 
 export default function Employees() {
   const { t } = useTranslation();
-  const { employees, deleteEmployee } = useDataStore();
   const { toast } = useToast();
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
   const [deleting, setDeleting] = useState<Employee | null>(null);
   const [designation, setDesignation] = useState("all");
 
-  const filtered = employees.filter((e) => designation === "all" || e.designation === designation);
-  const table = useTableData(filtered, { searchFields: (e) => [e.name, e.phone], pageSize: 8 });
+  const loadEmployees = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiGetEmployees();
+      setEmployees(data);
+    } catch (err) {
+      setError((err as Error).message);
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: (err as Error).message,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadEmployees();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const designations = useMemo(
+    () =>
+      Array.from(
+        new Set(employees.map((e) => e.designation).filter(Boolean)),
+      ) as string[],
+    [employees],
+  );
+
+  const filtered = employees.filter(
+    (e) => designation === "all" || e.designation === designation,
+  );
+  const table = useTableData(filtered, {
+    searchFields: (e) => [e.name, e.phone ?? ""],
+    pageSize: 8,
+  });
+
+  const handleDeleteConfirm = async () => {
+    if (!deleting) return;
+    try {
+      await apiDeleteEmployee(deleting.employee_id);
+      toast({
+        variant: "success",
+        title: t("toast.deletedTitle"),
+        description: t("toast.deletedDesc", { item: deleting.name }),
+      });
+      setDeleting(null);
+      loadEmployees();
+    } catch (err) {
+      toast({
+        variant: "error",
+        title: t("common.error"),
+        description: (err as Error).message,
+      });
+    }
+  };
 
   return (
     <div>
       <PageHeader
         title={t("employees.title")}
         subtitle={t("employees.subtitle")}
-        action={<Button onClick={() => { setEditing(null); setDialogOpen(true); }}><Plus size={16} /> {t("employees.addEmployee")}</Button>}
+        action={
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setDialogOpen(true);
+            }}
+          >
+            <Plus size={16} /> {t("employees.addEmployee")}
+          </Button>
+        }
       />
 
       <Card>
         <div className="flex flex-wrap items-center gap-2.5 border-b border-line p-4">
-          <SearchInput value={table.search} onChange={table.setSearch} placeholder={t("employees.searchPlaceholder")} />
-          <Select className="!h-9 w-auto max-w-[180px]" value={designation} onChange={(e) => setDesignation(e.target.value)}>
+          <SearchInput
+            value={table.search}
+            onChange={table.setSearch}
+            placeholder={t("employees.searchPlaceholder")}
+          />
+          <Select
+            className="!h-9 w-auto max-w-[180px]"
+            value={designation}
+            onChange={(e) => setDesignation(e.target.value)}
+          >
             <option value="all">{t("common.allCategories")}</option>
             {designations.map((d) => (
-              <option key={d} value={d}>{t(`employees.designations.${d}`)}</option>
+              <option key={d} value={d}>
+                {d}
+              </option>
             ))}
           </Select>
         </div>
 
-        {table.rows.length === 0 ? (
-          <EmptyState title={t("common.noResults")} hint={t("common.noResultsHint")} />
+        {loading ? (
+          <EmptyState title={t("common.loading") ?? "Loading..."} hint="" />
+        ) : error ? (
+          <EmptyState title={t("common.error")} hint={error} />
+        ) : table.rows.length === 0 ? (
+          <EmptyState
+            title={t("common.noResults")}
+            hint={t("common.noResultsHint")}
+          />
         ) : (
           <TableWrap>
             <Table>
               <THead>
                 <TR>
-                  <TH sortable sortDir={table.sortKey === "name" ? table.sortDir : null} onClick={() => table.toggleSort("name")}>{t("employees.columns.name")}</TH>
+                  <TH
+                    sortable
+                    sortDir={table.sortKey === "name" ? table.sortDir : null}
+                    onClick={() => table.toggleSort("name")}
+                  >
+                    {t("employees.columns.name")}
+                  </TH>
                   <TH>{t("employees.columns.phone")}</TH>
+                  <TH>{t("employees.form.address")}</TH>
                   <TH>{t("employees.columns.designation")}</TH>
-                  <TH sortable sortDir={table.sortKey === "salary" ? table.sortDir : null} onClick={() => table.toggleSort("salary")}>{t("employees.columns.salary")}</TH>
+                  <TH
+                    sortable
+                    sortDir={table.sortKey === "salary" ? table.sortDir : null}
+                    onClick={() => table.toggleSort("salary")}
+                  >
+                    {t("employees.columns.salary")}
+                  </TH>
                   <TH>{t("employees.columns.joiningDate")}</TH>
                   <TH>{t("employees.columns.status")}</TH>
                   <TH className="text-right">{t("common.actions")}</TH>
@@ -159,19 +406,44 @@ export default function Employees() {
               </THead>
               <TBody>
                 {table.rows.map((e) => (
-                  <TR key={e.id}>
+                  <TR key={e.employee_id}>
                     <TD className="font-medium">{e.name}</TD>
                     <TD className="num text-muted">{e.phone}</TD>
-                    <TD className="text-muted">{t(`employees.designations.${e.designation}`)}</TD>
-                    <TD className="num">{formatCurrency(e.salary)}</TD>
-                    <TD className="text-muted">{formatDate(e.joiningDate)}</TD>
-                    <TD><StatusBadge status={e.status} /></TD>
+                    <TD
+                      className="text-muted max-w-[220px] truncate"
+                      title={e.address ?? ""}
+                    >
+                      {e.address}
+                    </TD>
+                    <TD className="text-muted">{e.designation}</TD>
+                    <TD className="num">
+                      {e.salary != null ? formatCurrency(e.salary) : "-"}
+                    </TD>
+                    <TD className="text-muted">
+                      {e.joining_date ? formatDate(e.joining_date) : "-"}
+                    </TD>
+                    <TD>
+                      <StatusBadge status={e.status.toLowerCase() as Status} />
+                    </TD>
                     <TD>
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => { setEditing(e); setDialogOpen(true); }} aria-label={t("common.edit")}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            setEditing(e);
+                            setDialogOpen(true);
+                          }}
+                          aria-label={t("common.edit")}
+                        >
                           <Pencil size={15} />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={() => setDeleting(e)} aria-label={t("common.delete")}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setDeleting(e)}
+                          aria-label={t("common.delete")}
+                        >
                           <Trash2 size={15} className="text-danger" />
                         </Button>
                       </div>
@@ -182,19 +454,27 @@ export default function Employees() {
             </Table>
           </TableWrap>
         )}
-        <Pagination page={table.page} totalPages={table.totalPages} onChange={table.setPage} totalItems={table.totalItems} pageSize={table.pageSize} />
+        <Pagination
+          page={table.page}
+          totalPages={table.totalPages}
+          onChange={table.setPage}
+          totalItems={table.totalItems}
+          pageSize={table.pageSize}
+        />
       </Card>
 
-      <EmployeeFormDialog open={dialogOpen} onClose={() => setDialogOpen(false)} editing={editing} />
+      <EmployeeFormDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        editing={editing}
+        onSaved={loadEmployees}
+      />
       {deleting && (
         <ConfirmDialog
           open={!!deleting}
           onClose={() => setDeleting(null)}
           itemName={deleting.name}
-          onConfirm={() => {
-            deleteEmployee(deleting.id);
-            toast({ variant: "success", title: t("toast.deletedTitle"), description: t("toast.deletedDesc", { item: deleting.name }) });
-          }}
+          onConfirm={handleDeleteConfirm}
         />
       )}
     </div>
