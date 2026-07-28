@@ -58,8 +58,8 @@ function DistributorFormDialog({ open, onClose, editing }: { open: boolean; onCl
       title={editing ? t("distributors.editDistributor") : t("distributors.addDistributor")}
       footer={
         <>
-          <Button variant="outline" onClick={() => { reset(); onClose(); }}>{t("common.cancel")}</Button>
-          <Button onClick={handleSubmit(onSubmit)}>{t("common.save")}</Button>
+          <Button variant="outline" size="sm" onClick={() => { reset(); onClose(); }}>{t("common.cancel")}</Button>
+          <Button size="sm" onClick={handleSubmit(onSubmit)}>{t("common.save")}</Button>
         </>
       }
     >
@@ -120,7 +120,7 @@ export default function Distributors() {
       <PageHeader
         title={t("distributors.title")}
         subtitle={t("distributors.subtitle")}
-        action={<Button onClick={() => { setEditing(null); setDialogOpen(true); }}><Plus size={16} /> {t("distributors.addDistributor")}</Button>}
+        action={<Button size="sm" onClick={() => { setEditing(null); setDialogOpen(true); }}><Plus size={16} /> {t("distributors.addDistributor")}</Button>}
       />
 
       <Card>

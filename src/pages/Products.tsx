@@ -641,6 +641,7 @@ export default function Products() {
         subtitle={t("products.subtitle")}
         action={
           <Button
+          size="sm"
             onClick={() => {
               setEditing(null);
               setDialogOpen(true);

@@ -171,7 +171,7 @@ export default function CustomerSales() {
                 </div>
               </div>
 
-              <Button className="w-full" size="md" disabled={cart.length === 0} onClick={complete}>
+              <Button className="w-full" size="sm" disabled={cart.length === 0} onClick={complete}>
                 {t("customerSales.completeSale")}
               </Button>
             </div>
