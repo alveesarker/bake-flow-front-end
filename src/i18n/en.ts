@@ -5,6 +5,7 @@ const en = {
   },
   nav: {
     dashboard: "Dashboard",
+    order: "Order",
     products: "Products",
     productInventory: "Finished Goods",
     rawMaterials: "Inventory",

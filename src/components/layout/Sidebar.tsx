@@ -2,9 +2,7 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   Package,
-  Boxes,
   Wheat,
-  Warehouse,
   Factory,
   ShoppingCart,
   Truck,
@@ -16,6 +14,7 @@ import {
   Settings as SettingsIcon,
   PanelLeftClose,
   PanelLeftOpen,
+  ClipboardList,
 } from "lucide-react";
 import { useTranslation } from "../../i18n/I18nContext";
 import { cn } from "../../lib/utils";
@@ -26,6 +25,7 @@ const items = [
   { to: "/inventory", icon: Wheat, key: "rawMaterials" },
   { to: "/production", icon: Factory, key: "production" },
   { to: "/customer-sales", icon: ShoppingCart, key: "customerSales" },
+  { to: "/order", icon: ClipboardList, key: "order"},
   { to: "/distributor-sales", icon: Truck, key: "distributorSales" },
   { to: "/distributors", icon: Users, key: "distributors" },
   { to: "/employees", icon: UserRound, key: "employees" },
