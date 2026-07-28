@@ -218,6 +218,7 @@ export default function DistributorSales() {
                       <p className="mt-1 num text-sm font-semibold text-ink">
                         {formatCurrency(Number(p.distributor_price))}
                       </p>
+                      <p className="mt-0.5 text-[11px] text-muted">Stock: {p.stock_quantity}</p>
                     </button>
                   ))}
                 </div>
