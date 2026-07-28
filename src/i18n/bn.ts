@@ -6,6 +6,7 @@ const bn: TranslationDict = {
     tagline: "স্মার্ট বেকারি ম্যানেজমেন্ট সিস্টেম",
   },
   nav: {
+    order: "অর্ডার",
     dashboard: "ড্যাশবোর্ড",
     products: "পণ্য",
     productInventory: "প্রস্তুত পণ্য",
@@ -31,6 +32,7 @@ const bn: TranslationDict = {
     signOut: "সাইন আউট",
   },
   common: {
+    select: "নির্বাচন করুন",
     add: "যোগ করুন",
     edit: "সম্পাদনা",
     delete: "মুছুন",
@@ -163,6 +165,7 @@ const bn: TranslationDict = {
     editProduct: "পণ্য সম্পাদনা",
     searchPlaceholder: "নাম বা কোড দিয়ে পণ্য খুঁজুন…",
     columns: {
+      price: "মূল্য",
       image: "ছবি",
       name: "পণ্যের নাম",
       code: "পণ্য কোড",

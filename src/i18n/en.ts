@@ -11,7 +11,7 @@ const en = {
     rawMaterials: "Inventory",
     rawMaterialInventory: "Raw Material Inventory",
     production: "Production",
-    customerSales: "Customer Sales",
+    customerSales: "Retail Sales",
     distributorSales: "Distributor Sales",
     distributors: "Distributors",
     employees: "Employees",
