@@ -314,6 +314,7 @@ const en = {
     },
   },
   customerSales: {
+    exceedsStock: "Exceeds Stock",
     title: "Customer Sales",
     subtitle: "Point of sale for walk-in customers.",
     searchPlaceholder: "Search products…",

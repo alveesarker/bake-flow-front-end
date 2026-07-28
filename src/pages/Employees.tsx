@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -7,7 +7,6 @@ import { StatusBadge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Dialog } from "../components/ui/Dialog";
-import type { Status} from "../types";
 import {
   FieldError,
   FieldGroup,
@@ -17,7 +16,6 @@ import {
   Textarea,
 } from "../components/ui/Field";
 import {
-  ConfirmDialog,
   EmptyState,
   PageHeader,
   Pagination,
@@ -36,6 +34,7 @@ import { useTableData } from "../hooks/useTableData";
 import { useToast } from "../hooks/useToast";
 import { useTranslation } from "../i18n/I18nContext";
 import { formatCurrency, formatDate } from "../lib/utils";
+import type { Status } from "../types";
 
 const API_BASE_URL = "http://localhost:5000/api";
 
@@ -96,11 +95,27 @@ async function apiUpdateEmployee(
   return res.json();
 }
 
-async function apiDeleteEmployee(id: number): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/employee/${id}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new Error("Failed to delete employee");
+const EMPTY_DEFAULTS: EmployeeFormValues = {
+  name: "",
+  phone: "",
+  address: "",
+  designation: "",
+  salary: 15000,
+  joining_date: new Date().toISOString().slice(0, 10),
+  status: "Active",
+};
+
+function employeeToFormValues(editing: Employee | null): EmployeeFormValues {
+  if (!editing) return EMPTY_DEFAULTS;
+  return {
+    name: editing.name,
+    phone: editing.phone ?? "",
+    address: editing.address ?? "",
+    designation: editing.designation ?? "",
+    salary: editing.salary ?? 0,
+    joining_date: editing.joining_date ? editing.joining_date.slice(0, 10) : "",
+    status: editing.status,
+  };
 }
 
 function EmployeeFormDialog({
@@ -108,11 +123,13 @@ function EmployeeFormDialog({
   onClose,
   editing,
   onSaved,
+  designationOptions,
 }: {
   open: boolean;
   onClose: () => void;
   editing: Employee | null;
   onSaved: () => void;
+  designationOptions: string[];
 }) {
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -126,28 +143,17 @@ function EmployeeFormDialog({
     formState: { errors },
   } = useForm<EmployeeFormValues>({
     resolver: zodResolver(schema),
-    defaultValues: editing
-      ? {
-          name: editing.name,
-          phone: editing.phone ?? "",
-          address: editing.address ?? "",
-          designation: editing.designation ?? "",
-          salary: editing.salary ?? 0,
-          joining_date: editing.joining_date
-            ? editing.joining_date.slice(0, 10)
-            : "",
-          status: editing.status,
-        }
-      : {
-          name: "",
-          phone: "",
-          address: "",
-          designation: "",
-          salary: 15000,
-          joining_date: new Date().toISOString().slice(0, 10),
-          status: "Active",
-        },
+    defaultValues: employeeToFormValues(editing),
   });
+
+  // Keep the form in sync with the employee being edited (or cleared for "add")
+  // every time the dialog is opened, since the dialog stays mounted between uses.
+  useEffect(() => {
+    if (open) {
+      reset(employeeToFormValues(editing));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editing]);
 
   const onSubmit = async (values: EmployeeFormValues) => {
     setSubmitting(true);
@@ -217,10 +223,14 @@ function EmployeeFormDialog({
           </FieldGroup>
           <FieldGroup>
             <FieldLabel required>{t("employees.form.designation")}</FieldLabel>
-            <Input
-              invalid={!!errors.designation}
-              {...register("designation")}
-            />
+            <Select invalid={!!errors.designation} {...register("designation")}>
+              <option value="">{t("common.select") ?? "Select..."}</option>
+              {designationOptions.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </Select>
             <FieldError>{errors.designation?.message}</FieldError>
           </FieldGroup>
         </div>
@@ -268,7 +278,6 @@ export default function Employees() {
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
-  const [deleting, setDeleting] = useState<Employee | null>(null);
   const [designation, setDesignation] = useState("all");
 
   const loadEmployees = async () => {
@@ -309,26 +318,6 @@ export default function Employees() {
     searchFields: (e) => [e.name, e.phone ?? ""],
     pageSize: 8,
   });
-
-  const handleDeleteConfirm = async () => {
-    if (!deleting) return;
-    try {
-      await apiDeleteEmployee(deleting.employee_id);
-      toast({
-        variant: "success",
-        title: t("toast.deletedTitle"),
-        description: t("toast.deletedDesc", { item: deleting.name }),
-      });
-      setDeleting(null);
-      loadEmployees();
-    } catch (err) {
-      toast({
-        variant: "error",
-        title: t("common.error"),
-        description: (err as Error).message,
-      });
-    }
-  };
 
   return (
     <div>
@@ -438,14 +427,6 @@ export default function Employees() {
                         >
                           <Pencil size={15} />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setDeleting(e)}
-                          aria-label={t("common.delete")}
-                        >
-                          <Trash2 size={15} className="text-danger" />
-                        </Button>
                       </div>
                     </TD>
                   </TR>
@@ -468,15 +449,8 @@ export default function Employees() {
         onClose={() => setDialogOpen(false)}
         editing={editing}
         onSaved={loadEmployees}
+        designationOptions={designations}
       />
-      {deleting && (
-        <ConfirmDialog
-          open={!!deleting}
-          onClose={() => setDeleting(null)}
-          itemName={deleting.name}
-          onConfirm={handleDeleteConfirm}
-        />
-      )}
     </div>
   );
 }
