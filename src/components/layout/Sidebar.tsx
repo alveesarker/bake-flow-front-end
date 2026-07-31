@@ -26,7 +26,6 @@ const items = [
   { to: "/production", icon: Factory, key: "production" },
   { to: "/order", icon: ClipboardList, key: "order"},
   { to: "/customer-sales", icon: ShoppingCart, key: "customerSales" },
-  { to: "/distributor-sales", icon: Truck, key: "distributorSales" },
   { to: "/distributors", icon: Users, key: "distributors" },
   { to: "/employees", icon: UserRound, key: "employees" },
   { to: "/expenses", icon: Receipt, key: "expenses" },
